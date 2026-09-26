@@ -49,6 +49,7 @@ export default function MermaidDiagram({ chart, id, selectable, active, onPick }
           primaryBorderColor: "#173ded",
           primaryTextColor: "#0a0b14",
         },
+        sequence: { useMaxWidth: false, diagramMarginX: 12, diagramMarginY: 12 },
         flowchart: {
           useMaxWidth: false,
           htmlLabels: true,

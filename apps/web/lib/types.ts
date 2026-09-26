@@ -43,6 +43,7 @@ export interface OverviewModule {
   id: string;
   label: string;
   files: number;
+  classes?: string[];
 }
 
 export interface OverviewDep {

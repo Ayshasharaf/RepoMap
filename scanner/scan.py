@@ -742,9 +742,31 @@ def _is_outbound_name(simple: str, chain: list[str], outbound_declared: set[str]
     return None
 
 
-def _trace_method(method, owner: str, fields: dict, nodes: dict, services: dict, repositories: dict, entities: dict, outbound_declared: set[str], seen: set) -> list[dict]:
-    """Follow this method's calls: service method, repository, or a client. One hop into a service method."""
-    if method is None or not getattr(method, "body", None):
+def _method_named(node, name: str, argc: int | None):
+    """A method on this type. Prefer the overload whose parameter count matches the call."""
+    if node is None or not name:
+        return None
+    methods = [item for item in (getattr(node, "methods", None) or []) if item.name == name]
+    if argc is not None:
+        exact = [item for item in methods if len(item.parameters or []) == argc]
+        if exact:
+            return exact[0]
+    return methods[0] if methods else None
+
+
+def _project_role(name: str, services: dict, repositories: dict, entities: dict) -> str:
+    if name in entities:
+        return "Entity"
+    if name in repositories or name.endswith("Repository") or name.endswith("Repo"):
+        return "Repository"
+    if name in services or name.endswith("Service"):
+        return "Service"
+    return "Helper"
+
+
+def _trace_method(method, owner: str, fields: dict, nodes: dict, services: dict, repositories: dict, entities: dict, outbound_declared: set[str], seen: set, depth: int = 0) -> list[dict]:
+    """Follow this method into the project classes it calls, including its own private methods."""
+    if method is None or not getattr(method, "body", None) or depth > 12:
         return []
     key = (owner, getattr(method, "name", ""))
     if key in seen:
@@ -760,12 +782,26 @@ def _trace_method(method, owner: str, fields: dict, nodes: dict, services: dict,
         seen_edges.add(edge)
         calls.append({"from": src, "to": dst, "role": role})
 
+    def follow(called, class_name: str, class_node) -> None:
+        if called is None or class_node is None:
+            return
+        for nested in _trace_method(
+            called, class_name, _named_types(class_node), nodes, services, repositories, entities, outbound_declared, seen, depth + 1,
+        ):
+            add(nested["from"], nested["to"], nested["role"])
+
     for _, inv in method.filter(javalang.tree.MethodInvocation):
-        chain = fields.get(_qualifier_name(inv) or "", [])
+        member = inv.member or ""
+        argc = len(inv.arguments) if inv.arguments is not None else None
+        qualifier = _qualifier_name(inv)
+        if not qualifier or qualifier == "this":
+            owner_node = nodes.get(owner, (None, None))[1]
+            follow(_method_named(owner_node, member, argc), owner, owner_node)
+            continue
+        chain = fields.get(qualifier, [])
         if not chain:
             continue
         simple = chain[-1]
-        member = inv.member or ""
         outbound = _is_outbound_name(simple, chain, outbound_declared)
         if outbound:
             add(owner, outbound, "Outbound")
@@ -785,18 +821,16 @@ def _trace_method(method, owner: str, fields: dict, nodes: dict, services: dict,
             if entity in entities:
                 add(simple, entity, "Entity")
             continue
-        if simple in services or simple.endswith("Service"):
-            add(owner, simple, "Service")
-            target = nodes.get(simple)
-            if not target:
-                continue
-            called = next((item for item in (target[1].methods or []) if item.name == member), None)
-            if called is None:
-                continue
-            for nested in _trace_method(
-                called, simple, _named_types(target[1]), nodes, services, repositories, entities, outbound_declared, seen,
-            ):
-                add(nested["from"], nested["to"], nested["role"])
+        if simple not in nodes and simple not in services and not simple.endswith("Service"):
+            continue
+        role = _project_role(simple, services, repositories, entities)
+        add(owner, simple, role)
+        if role == "Entity":
+            continue
+        target = nodes.get(simple)
+        if not target:
+            continue
+        follow(_method_named(target[1], member, argc), simple, target[1])
     return calls
 
 
@@ -952,6 +986,9 @@ def _scan_flow(java_files: list[Path], entities: dict, root: str = "") -> tuple[
             return "Service"
         return "Job"
 
+    from sequence import load_triggers, route_diagrams
+    triggers = load_triggers(root)
+
     def build_step(class_name: str, cls, types: list[str], entity: str | None, method, entry: str, entry_kind: str) -> dict:
         role = owner_role(class_name)
         calls = _trace_method(method, class_name, _named_types(cls), nodes, services, repositories, entities, outbound_declared, set())
@@ -964,6 +1001,23 @@ def _scan_flow(java_files: list[Path], entities: dict, root: str = "") -> tuple[
         for call in calls:
             if call["role"] == "Outbound" and call["to"] not in outbound:
                 outbound.append(call["to"])
+        story = {"sequence": "", "transaction": "", "trigger": ""}
+        try:
+            story = route_diagrams(
+                method, class_name, cls, entry, nodes, services, repositories, entities, outbound_declared, triggers,
+            )
+        except Exception:
+            safe_entry = (entry or class_name).replace('"', "'")
+            story = {
+                "sequence": "\n".join([
+                    "sequenceDiagram",
+                    "    participant Client",
+                    f"    participant {class_name}",
+                    f"    Client->>{class_name}: {safe_entry}",
+                ]),
+                "transaction": "",
+                "trigger": "",
+            }
         return {
             "entry": entry,
             "entry_kind": entry_kind,
@@ -976,6 +1030,9 @@ def _scan_flow(java_files: list[Path], entities: dict, root: str = "") -> tuple[
             "repository": repository,
             "entity": found_entity if found_entity in entities else None,
             "outbound": outbound,
+            "sequence": story.get("sequence") or "",
+            "transaction": story.get("transaction") or "",
+            "trigger": story.get("trigger") or "",
         }
 
     mapping_anns = {"RequestMapping", "GetMapping", "PostMapping", "PutMapping", "PatchMapping", "DeleteMapping"}
@@ -1030,6 +1087,23 @@ def _scan_flow(java_files: list[Path], entities: dict, root: str = "") -> tuple[
         add_background(class_name, cls, types)
     for controller, cls, _class_path in controller_methods:
         add_background(controller, cls, controllers.get(controller, []))
+
+    if not chains:
+        produced = 0
+        for name in sorted(nodes):
+            _file, node = nodes[name]
+            if node is None or not getattr(node, "methods", None):
+                continue
+            methods = sorted((item for item in node.methods if getattr(item, "body", None)), key=lambda item: item.name)
+            chosen = methods[:2] or [None]
+            for method in chosen:
+                label = name if method is None else f"{name}.{method.name}"
+                chains.append(build_step(name, node, [], None, method, label, "request"))
+                produced += 1
+                if produced >= 20:
+                    break
+            if produced >= 20:
+                break
 
     classes = _classes_from_flow(chains, nodes, entities, repositories, outbound_declared)
     return chains, classes
@@ -1174,6 +1248,16 @@ def _make_diagrams(entities: dict, relations: list[dict], endpoints: list[dict],
         arch_lines.extend(_class_comment_lines(info))
     for step in flow or []:
         arch_lines.append(_path_comment(step))
+    for index, step in enumerate(flow or []):
+        entry = (step.get("entry") or "").replace("\t", " ")
+        arch_lines.append(f"%% diagram\t{index}\tentry\t{entry}")
+        for kind in ("sequence", "transaction", "trigger"):
+            text = step.get(kind) or ""
+            if not text:
+                continue
+            tag = {"sequence": "seq", "transaction": "tx", "trigger": "trigger"}[kind]
+            for line in text.splitlines():
+                arch_lines.append(f"%% diagram\t{index}\t{tag}\t{line.replace(chr(9), '    ')}")
 
     erd_lines = ["erDiagram"]
     for e in sorted(entities.values(), key=lambda x: x["name"]):
@@ -1212,8 +1296,8 @@ def _make_diagrams(entities: dict, relations: list[dict], endpoints: list[dict],
 
     return {
         "architecture": "\n".join(arch_lines),
-        "erd": "\n".join(erd_lines),
-        "connections": "\n".join(conn_lines),
+        "erd": "\n".join(erd_lines) if names or relations else "",
+        "connections": "\n".join(conn_lines) if names or relations else "",
     }
 
 
@@ -1230,16 +1314,18 @@ def scan_directory(root: str, commit: str = "local") -> dict:
 
     entity_map = _scan_entities(java_files, root)
 
-    if not entity_map:
-        return _unscored(root, commit, "No @Entity classes found")
-
     if len(java_files) > 500:
         return _unscored(root, commit, f"Too many Java files ({len(java_files)} > 500)")
+
+    flow, classes = _scan_flow(java_files, entity_map, root)
+    if not entity_map:
+        result = _unscored(root, commit, "No @Entity classes found")
+        result["diagrams"] = _make_diagrams({}, [], [], flow, classes)
+        return result
 
     relations = _scan_relations(java_files, root, entity_map)
     findings, repo_method_scope_gaps = _scan_findings(java_files, root, entity_map, relations)
     endpoints = _scan_endpoints(java_files, root, entity_map, repo_method_scope_gaps)
-    flow, classes = _scan_flow(java_files, entity_map, root)
 
     scope_gaps = sum(1 for f in findings if f["kind"] == "scope_gap")
     n_plus_one = sum(1 for f in findings if f["kind"] == "n_plus_one")

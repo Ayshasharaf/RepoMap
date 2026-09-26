@@ -1,5 +1,6 @@
 """Facts a new teammate needs, read from the cloned tree. No network, no timestamps."""
 
+import os
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -57,8 +58,8 @@ def build_overview(root: str, scan: dict) -> dict:
     entries = _entry_points(base, java_files)
     env_vars = _env_vars(base)
     checklist = _checklist(entries, env_vars)
-    test_files = [p for p in java_files if _rel(p, base).startswith("src/test/")]
-    workflows = sorted(p.name for p in (base / ".github" / "workflows").glob("*") if p.suffix in {".yml", ".yaml"}) if (base / ".github" / "workflows").is_dir() else []
+    test_files = [p for p in java_files if "/src/test/" in f"/{_rel(p, base)}"]
+    workflows = _ci_files(base)
     coverage = _coverage(base)
     return {
         "identity": {
@@ -95,8 +96,11 @@ def _modules(java_files: list[Path], root: Path, entity_names: set[str]) -> tupl
         name = path.stem
         key, label = ("data", "Data") if name in entity_names else _layer(name, rel)
         class_module[name] = key
-        bucket = counts.setdefault(key, {"id": key, "label": label, "files": 0})
+        bucket = counts.setdefault(key, {"id": key, "label": label, "files": 0, "classes": []})
         bucket["files"] += 1
+        bucket["classes"].append(name)
+    for bucket in counts.values():
+        bucket["classes"] = sorted(set(bucket["classes"]))
     return sorted(counts.values(), key=lambda item: item["label"]), class_module
 
 
@@ -169,27 +173,42 @@ def _module_diagram(modules: list[dict], edges: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _named_files(root: Path, names: set[str]) -> list[Path]:
+    skip = {".git", "node_modules", "target", "build", ".gradle", "out"}
+    found = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [name for name in dirnames if name not in skip and not name.startswith(".")]
+        for filename in filenames:
+            if filename not in names:
+                continue
+            path = Path(dirpath) / filename
+            try:
+                if path.stat().st_size > 1_500_000:
+                    continue
+            except OSError:
+                continue
+            found.append(path)
+    return found
+
+
 def _external_deps(root: Path) -> list[dict]:
     found: dict[str, str] = {}
-    pom = root / "pom.xml"
-    if pom.is_file():
+    for pom in _named_files(root, {"pom.xml"}):
         try:
             tree = ET.parse(pom)
-            ns = ""
-            if tree.getroot().tag.startswith("{"):
-                ns = tree.getroot().tag.split("}")[0] + "}"
-            for dep in tree.findall(f".//{ns}dependency"):
-                artifact = dep.findtext(f"{ns}artifactId") or ""
-                artifact = artifact.strip()
-                if artifact and artifact not in found:
-                    found[artifact] = _purpose(artifact)
         except ET.ParseError:
-            pass
-    for name in ("build.gradle", "build.gradle.kts"):
-        gradle = root / name
-        if not gradle.is_file():
             continue
-        for match in re.findall(r"""['"]([A-Za-z0-9_.\-]+):([A-Za-z0-9_.\-]+)(?::[^'"]+)?['"]""", gradle.read_text(encoding="utf-8", errors="ignore")):
+        ns = ""
+        if tree.getroot().tag.startswith("{"):
+            ns = tree.getroot().tag.split("}")[0] + "}"
+        for dep in tree.findall(f".//{ns}dependency"):
+            artifact = (dep.findtext(f"{ns}artifactId") or "").strip()
+            if artifact and artifact not in found and not artifact.startswith("$"):
+                found[artifact] = _purpose(artifact)
+    gradle_re = re.compile(r"""['"]([A-Za-z0-9_.\-]+):([A-Za-z0-9_.\-]+)(?::[^'"]+)?['"]""")
+    for gradle in _named_files(root, {"build.gradle", "build.gradle.kts"}):
+        text = gradle.read_text(encoding="utf-8", errors="ignore")
+        for match in gradle_re.findall(text):
             artifact = match[1]
             if artifact not in found:
                 found[artifact] = _purpose(artifact)
@@ -204,13 +223,16 @@ def _purpose(artifact: str) -> str:
     return "Library"
 
 
+def _build_blob(root: Path) -> str:
+    parts = []
+    for path in _named_files(root, {"pom.xml", "build.gradle", "build.gradle.kts"}):
+        parts.append(path.read_text(encoding="utf-8", errors="ignore").lower())
+    return "\n".join(parts)
+
+
 def _stack(root: Path, external: list[dict]) -> list[str]:
     stack = []
-    blob = ""
-    for name in ("pom.xml", "build.gradle", "build.gradle.kts"):
-        path = root / name
-        if path.is_file():
-            blob += path.read_text(encoding="utf-8", errors="ignore").lower()
+    blob = _build_blob(root)
     if "spring-boot" in blob or any("spring-boot" in item["name"] for item in external):
         stack.append("Spring Boot")
     for label in ("HTTP API", "Database", "Auth", "Queue", "Cache", "External API"):
@@ -268,16 +290,48 @@ def _entry_points(root: Path, java_files: list[Path]) -> list[dict]:
             if upper.startswith("CMD") or upper.startswith("ENTRYPOINT"):
                 entries.append({"name": "Docker", "detail": stripped})
                 break
-    if (root / "mvnw").is_file() or (root / "pom.xml").is_file():
-        entries.append({"name": "Run locally", "detail": "./mvnw spring-boot:run"})
-        entries.append({"name": "Tests", "detail": "./mvnw test"})
-    elif (root / "gradlew").is_file() or (root / "build.gradle").is_file() or (root / "build.gradle.kts").is_file():
-        entries.append({"name": "Run locally", "detail": "./gradlew bootRun"})
-        entries.append({"name": "Tests", "detail": "./gradlew test"})
-    package_json = root / "package.json"
-    if package_json.is_file():
-        entries.append({"name": "Node scripts", "detail": "package.json"})
+    blob = _build_blob(root)
+    spring = "spring-boot" in blob
+    has_maven = bool(_named_files(root, {"pom.xml"}))
+    has_gradle = bool(_named_files(root, {"build.gradle", "build.gradle.kts"}))
+    mvn = "./mvnw" if (root / "mvnw").is_file() else "mvn"
+    gradle = "./gradlew" if (root / "gradlew").is_file() else "gradle"
+    if spring and has_maven:
+        entries.append({"name": "Run locally", "detail": f"{mvn} spring-boot:run"})
+        entries.append({"name": "Tests", "detail": f"{mvn} test"})
+    elif spring and has_gradle:
+        entries.append({"name": "Run locally", "detail": f"{gradle} bootRun"})
+        entries.append({"name": "Tests", "detail": f"{gradle} test"})
+    elif has_maven:
+        entries.append({"name": "Tests", "detail": f"{mvn} test"})
+    elif has_gradle:
+        entries.append({"name": "Tests", "detail": f"{gradle} test"})
+    for command in _readme_commands(root):
+        entries.append({"name": "From the README", "detail": command})
     return entries
+
+
+def _readme_commands(root: Path) -> list[str]:
+    readme = next((root / name for name in ("README.md", "README.MD", "readme.md") if (root / name).is_file()), None)
+    if readme is None:
+        return []
+    text = readme.read_text(encoding="utf-8", errors="ignore")
+    found = []
+    seen = set()
+    for block in re.findall(r"```(?:bash|sh|shell|console|zsh)?\s*\n(.*?)```", text, flags=re.S | re.I):
+        for line in block.splitlines():
+            command = line.strip().lstrip("$").strip()
+            if not command or command.startswith("#"):
+                continue
+            if not re.match(r"(\./)?(mvnw|gradlew|mvn|gradle|docker|java)\b", command):
+                continue
+            if command in seen:
+                continue
+            seen.add(command)
+            found.append(command)
+            if len(found) == 4:
+                return found
+    return found
 
 
 def _env_vars(root: Path) -> list[str]:
@@ -314,15 +368,28 @@ def _checklist(entries: list[dict], env_vars: list[str]) -> list[dict]:
         steps.append({"title": "Run tests", "detail": test})
     if any(item["name"] == "Docker" for item in entries):
         steps.append({"title": "Or start the container", "detail": "docker build and run, using the Dockerfile command"})
+    for item in entries:
+        if item["name"] == "From the README" and item["detail"] not in {run, test}:
+            steps.append({"title": "From the README", "detail": item["detail"]})
     if not steps:
-        steps.append({"title": "No setup file found", "detail": "The clone has no Maven or Gradle build, Dockerfile, or env example."})
+        steps.append({"title": "No setup file found", "detail": "This clone has no Maven or Gradle build, Dockerfile, or env example."})
     return steps
 
 
+def _ci_files(root: Path) -> list[str]:
+    names = []
+    folder = root / ".github" / "workflows"
+    if folder.is_dir():
+        names.extend(sorted(path.name for path in folder.iterdir() if path.suffix in {".yml", ".yaml"}))
+    for name in ("Jenkinsfile", ".gitlab-ci.yml", "azure-pipelines.yml"):
+        if (root / name).is_file():
+            names.append(name)
+    return names
+
+
 def _coverage(root: Path) -> str:
-    for name in ("pom.xml", "build.gradle", "build.gradle.kts"):
-        path = root / name
-        if path.is_file() and "jacoco" in path.read_text(encoding="utf-8", errors="ignore").lower():
+    for path in _named_files(root, {"pom.xml", "build.gradle", "build.gradle.kts"}):
+        if "jacoco" in path.read_text(encoding="utf-8", errors="ignore").lower():
             return "JaCoCo is configured. A percentage is not in the clone."
     return ""
 

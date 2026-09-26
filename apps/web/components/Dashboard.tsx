@@ -3,25 +3,81 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ScanResult, RepoMeta } from "@/lib/types";
 import type { FlowClass, FlowPath } from "@/lib/flow";
-import { parseFlow, parsePaths } from "@/lib/flow";
+import { parseFlow, parsePaths, parseStories } from "@/lib/flow";
 import MermaidDiagram from "./MermaidDiagram";
 
 function kindLabel(kind: string) {
   return { scope_gap: "Scope gap", n_plus_one: "N+1", broken_relation: "Broken rel." }[kind] ?? kind;
 }
 
+type SectionId = "overview" | "modules" | "flow" | "deps" | "entry" | "critical" | "health" | "checklist";
+
+const NAV = [
+  { id: "overview", label: "Overview", hint: "What this repo is" },
+  { id: "modules", label: "Architecture", hint: "Modules and imports" },
+  { id: "flow", label: "Data flow", hint: "The full call chain" },
+  { id: "deps", label: "Dependencies", hint: "Libraries and links" },
+  { id: "entry", label: "Entry points", hint: "How to run it" },
+  { id: "critical", label: "Critical paths", hint: "Routes with findings" },
+  { id: "health", label: "Health", hint: "Tests, CI, GitHub" },
+] as const;
+
+const PREVIEWS = [
+  { label: "Overview", hint: "What this repo is, before any diagram.", sketch: "cover" },
+  { label: "Architecture", hint: "Modules by responsibility, and how they import each other.", sketch: "rooms" },
+  { label: "Data flow", hint: "Each route as a line of stops, from the request to storage.", sketch: "rail" },
+  { label: "Dependencies", hint: "Libraries on shelves, named by what they are for.", sketch: "shelves" },
+  { label: "Entry points", hint: "The class that starts it, and the command that runs it.", sketch: "term" },
+  { label: "Critical paths", hint: "Only the routes that sit next to a finding.", sketch: "risk" },
+  { label: "Health", hint: "Tests, CI, stars, and what this clone cannot know.", sketch: "signals" },
+] as const;
+
+const MODULE_LABEL: Record<string, string> = {
+  api: "API",
+  services: "Services",
+  data: "Data",
+  workers: "Workers",
+  outbound: "Outbound",
+  auth: "Auth",
+  config: "Config",
+  app: "Other",
+};
+
+const MODULE_ABOUT: Record<string, string> = {
+  api: "The URLs this app exposes.",
+  services: "The classes that do the work.",
+  data: "Stored records and the repositories that load them.",
+  workers: "Jobs and message listeners.",
+  outbound: "Calls out to another system.",
+  auth: "Sign-in and access rules.",
+  config: "Spring setup.",
+  app: "DTOs, exceptions, and classes that are not one of the groups above.",
+};
+
+function findingClass(symbol: string) {
+  if (!symbol) return "";
+  const dot = symbol.indexOf(".");
+  return dot === -1 ? symbol : symbol.slice(0, dot);
+}
+
+function findingsForPath(path: FlowPath, findings: ScanResult["findings"]) {
+  return findings.filter((finding) => {
+    const owner = findingClass(finding.symbol);
+    const onHop = Boolean(owner) && path.hops.some((hop) => hop.name === owner);
+    const onRoute = Boolean(path.entry) && Boolean(finding.detail) && finding.detail.includes(path.entry);
+    return onHop || onRoute;
+  });
+}
+
 export default function Dashboard({ initialScans }: { initialScans: ScanResult[] }) {
   const [scans, setScans] = useState<ScanResult[]>(initialScans);
-  const [selected, setSelected] = useState<ScanResult | null>(null);
+  const [selected, setSelected] = useState<ScanResult | null>(initialScans[0] ?? null);
+  const [section, setSection] = useState<SectionId>("overview");
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sources, setSources] = useState<Record<string, string>>({});
   const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (selected) window.scrollTo({ top: 0, behavior: "smooth" });
-  }, [selected]);
 
   async function handleScan(e: React.FormEvent) {
     e.preventDefault();
@@ -44,6 +100,7 @@ export default function Dashboard({ initialScans }: { initialScans: ScanResult[]
         setScans((prev) => [result, ...prev.filter((s) => s.service !== result.service)]);
         setSources((prev) => ({ ...prev, [result.service]: trimmed }));
         setSelected(result);
+        setSection("overview");
         setUrl("");
       }
     } catch (err: unknown) {
@@ -53,151 +110,160 @@ export default function Dashboard({ initialScans }: { initialScans: ScanResult[]
     }
   }
 
-  function goHome() {
-    setSelected(null);
-    window.setTimeout(() => inputRef.current?.focus(), 50);
-  }
-
   return (
     <div>
-      <header className="topbar">
-        <div className="topbar-inner">
-          <button type="button" className="brand" onClick={goHome}>
-            RepoMap
-          </button>
-          {scans.length > 0 && (
-            <nav className="service-switch" aria-label="Scanned services">
-              {scans.map((scan) => {
-                const on = selected?.service === scan.service;
-                return (
-                  <button
-                    key={scan.service}
-                    type="button"
-                    className={on ? "service-chip is-on" : "service-chip"}
-                    aria-current={on ? "page" : undefined}
-                    onClick={() => setSelected(scan)}
-                  >
-                    {scan.service}
-                    <span className={`risk risk-${scan.counts.risk}`}>{scan.counts.risk}</span>
-                  </button>
-                );
-              })}
-            </nav>
-          )}
-        </div>
-      </header>
-
-      {selected ? (
-        <DetailPanel scan={selected} onHome={goHome} sourceUrl={sources[selected.service]} />
+      {!selected ? (
+        <>
+        <section className="plaque">
+          <div className="plaque-inner">
+            <div className="kicker">Paste a repo</div>
+            <h1>See how it is built.</h1>
+            <p>Map a public GitHub repository. Then choose Overview, Architecture, Data flow, Dependencies, Entry points, Critical paths, or Health.</p>
+            <form className="scan-form" onSubmit={handleScan}>
+              <input
+                ref={inputRef}
+                type="text"
+                placeholder="https://github.com/owner/repo"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                disabled={loading}
+                aria-label="GitHub repository URL"
+              />
+              <button className="btn-solid" type="submit" disabled={loading || !url.trim()}>
+                {loading ? "Mapping…" : "Map it"}
+              </button>
+            </form>
+            {error && <div className="error">{error}</div>}
+          </div>
+        </section>
+        <section className="previews">
+          <p className="section-kicker">After you map it</p>
+          <h2>Seven readings of the same repo.</h2>
+          <div className="preview-grid">
+            {PREVIEWS.map((item) => (
+              <article className="preview" key={item.label}>
+                <div className={`sketch sketch-${item.sketch}`} aria-hidden="true">
+                  {item.sketch === "cover" && (
+                    <>
+                      <i /><i /><i /><i />
+                    </>
+                  )}
+                  {item.sketch === "rooms" && (
+                    <>
+                      <b>API</b><b>Services</b><b>Data</b>
+                    </>
+                  )}
+                  {item.sketch === "rail" && (
+                    <>
+                      <span /><span /><span />
+                    </>
+                  )}
+                  {item.sketch === "shelves" && (
+                    <>
+                      <em>Database</em><em>Queue</em><em>Auth</em>
+                    </>
+                  )}
+                  {item.sketch === "term" && <code>./mvnw spring-boot:run</code>}
+                  {item.sketch === "risk" && (
+                    <>
+                      <span /><span className="is-hot" /><span />
+                    </>
+                  )}
+                  {item.sketch === "signals" && (
+                    <>
+                      <s /><s className="is-off" /><s />
+                    </>
+                  )}
+                </div>
+                <strong>{item.label}</strong>
+                <span>{item.hint}</span>
+              </article>
+            ))}
+          </div>
+        </section>
+        </>
       ) : (
-        <Home
-          scans={scans}
-          url={url}
-          setUrl={setUrl}
-          loading={loading}
-          error={error}
-          inputRef={inputRef}
-          onScan={handleScan}
-          onOpen={setSelected}
-        />
+        <>
+          <header className="command">
+            <div className="command-inner">
+              <div className="command-brand">Repo Map</div>
+              <form className="scan-form" onSubmit={handleScan}>
+                <input
+                  ref={inputRef}
+                  type="text"
+                  placeholder="https://github.com/owner/repo"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  disabled={loading}
+                  aria-label="GitHub repository URL"
+                />
+                <button className="btn-solid" type="submit" disabled={loading || !url.trim()}>
+                  {loading ? "Mapping…" : "Map it"}
+                </button>
+              </form>
+            </div>
+          </header>
+          {error && <div className="error band-error">{error}</div>}
+          {scans.length > 1 && (
+            <div className="repo-row">
+              {scans.map((scan) => (
+                <button
+                  key={scan.service}
+                  type="button"
+                  className={selected.service === scan.service ? "repo-pill is-on" : "repo-pill"}
+                  onClick={() => {
+                    setSelected(scan);
+                    setSection("overview");
+                  }}
+                >
+                  {scan.service}
+                </button>
+              ))}
+            </div>
+          )}
+          <nav className="choices" aria-label="What to show">
+            {NAV.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className={section === item.id ? "choice is-on" : "choice"}
+                aria-current={section === item.id ? "page" : undefined}
+                onClick={() => setSection(item.id)}
+              >
+                <strong>{item.label}</strong>
+                <span>{item.hint}</span>
+              </button>
+            ))}
+          </nav>
+          <DetailPanel
+            scan={selected}
+            sourceUrl={sources[selected.service]}
+            section={section}
+          />
+        </>
       )}
     </div>
   );
 }
 
-function Home({
-  scans,
-  url,
-  setUrl,
-  loading,
-  error,
-  inputRef,
-  onScan,
-  onOpen,
-}: {
-  scans: ScanResult[];
-  url: string;
-  setUrl: (value: string) => void;
-  loading: boolean;
-  error: string | null;
-  inputRef: React.RefObject<HTMLInputElement | null>;
-  onScan: (e: React.FormEvent) => void;
-  onOpen: (scan: ScanResult) => void;
-}) {
-  return (
-    <>
-      <header className="plaque">
-        <div className="plaque-inner">
-          <div className="kicker">01 / scan</div>
-          <h1>RepoMap</h1>
-          <p>Paste a public GitHub repo. RepoMap reads the Spring Boot code and draws how data moves through the service.</p>
-          <form className="scan-form" onSubmit={onScan}>
-            <input
-              ref={inputRef}
-              type="text"
-              placeholder="https://github.com/owner/repo"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              disabled={loading}
-              aria-label="GitHub repository URL"
-            />
-            <button className="btn-solid" type="submit" disabled={loading || !url.trim()}>
-              {loading ? "Scanning…" : "Scan"}
-            </button>
-          </form>
-          <p className="form-note">Scan clones that public repo and looks for entities, endpoints, and risky data access. It does not change the repository.</p>
-          {error && <div className="error">{error}</div>}
-        </div>
-      </header>
-
-      <section className="section">
-        <div className="section-kicker">02 / results</div>
-        <h2>Scans</h2>
-        <p className="section-lead">Open a service. The bar keeps Identity, Modules, Data flow, and the setup list in reach.</p>
-        <div className="key">
-          <span><strong>Scope gaps</strong> — a query returns tenant data with no tenant id</span>
-          <span><strong>N+1</strong> — a query inside a loop, or an eager collection</span>
-          <span><strong>Broken</strong> — a relation names a field that is not there</span>
-        </div>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Service</th>
-                <th>Scope gaps</th>
-                <th>N+1</th>
-                <th>Broken</th>
-                <th>Risk</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {scans.length === 0 ? (
-                <tr>
-                  <td className="empty" colSpan={6}>
-                    No scans yet. Paste a GitHub URL above.
-                  </td>
-                </tr>
-              ) : (
-                scans.map((scan) => (
-                  <tr key={scan.service} onClick={() => onOpen(scan)}>
-                    <td className="service-name">{scan.service}</td>
-                    <td>{scan.counts.scopeGaps}</td>
-                    <td>{scan.counts.nPlusOne}</td>
-                    <td>{scan.counts.brokenRelations}</td>
-                    <td>
-                      <span className={`risk risk-${scan.counts.risk}`}>{scan.counts.risk}</span>
-                    </td>
-                    <td className="open-hint">Open</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-    </>
-  );
+function sequenceFromPath(path: FlowPath | undefined) {
+  if (!path) return "sequenceDiagram\n    participant Client";
+  const label = path.entry.replace(/:/g, " ");
+  const ids = path.hops.map((hop, index) => `${hop.name.replace(/[^\w]/g, "_")}_${index}`);
+  const lines = [
+    "sequenceDiagram",
+    "    participant Client",
+    ...path.hops.map((hop, index) => `    participant ${ids[index]} as ${hop.name}`),
+  ];
+  if (!ids.length) {
+    lines.push(`    Client->>Client: ${label}`);
+    return lines.join("\n");
+  }
+  lines.push(`    Client->>${ids[0]}: ${label}`);
+  for (let index = 1; index < ids.length; index += 1) {
+    lines.push(`    ${ids[index - 1]}->>${ids[index]}: ${path.hops[index].role}`);
+  }
+  return lines.join("\n");
 }
 
 function noteClass(note: string) {
@@ -235,170 +301,248 @@ function MethodPanel({ item }: { item: FlowClass }) {
   );
 }
 
-function PathList({ paths, picked, onPick }: { paths: FlowPath[]; picked: string | null; onPick: (name: string) => void }) {
+function hopTone(role: string) {
+  if (role === "Entity" || role === "Repository") return "db";
+  if (role === "Outbound") return "exit";
+  if (role === "Listener" || role === "Job" || role === "Scheduler") return "async";
+  return "sync";
+}
+
+function FlowBoard({
+  paths,
+  classes,
+  picked,
+  onPick,
+  findings,
+}: {
+  paths: FlowPath[];
+  classes: FlowClass[];
+  picked: string | null;
+  onPick: (name: string) => void;
+  findings?: ScanResult["findings"];
+}) {
   return (
-    <div className="path-list">
-      {paths.map((path, pathIndex) => (
-        <article className="path-card" key={`${path.kind}-${path.entry}-${pathIndex}`}>
-          <div className="path-kicker">{path.kind === "job" ? "Starts on its own" : "Request"}</div>
-          <div className="path-entry">{path.entry}</div>
-          <div className="hops">
-            {path.hops.map((hop, index) => (
-              <span className="hop-wrap" key={`${hop.role}-${hop.name}-${index}`}>
-                {index > 0 && (
-                  <span className={hop.role === "Outbound" ? "hop-arrow is-out" : "hop-arrow"} aria-hidden="true">
-                    {hop.role === "Outbound" ? "⇢" : "→"}
-                  </span>
-                )}
-                <button
-                  type="button"
-                  className={[
-                    "hop",
-                    hop.role === "Outbound" ? "is-out" : "",
-                    hop.role === "Entity" ? "is-entity" : "",
-                    picked === hop.name ? "is-on" : "",
-                  ].filter(Boolean).join(" ")}
-                  onClick={() => onPick(hop.name)}
-                >
-                  <small>{hop.role}</small>
-                  {hop.name}
-                </button>
-              </span>
+    <div className="rails">
+      {paths.map((path, pathIndex) => {
+        const notes = findingsForPath(path, findings ?? []);
+        const openName = picked?.startsWith(`${pathIndex}::`) ? picked.slice(picked.indexOf("::") + 2) : "";
+        const open = openName ? classes.find((item) => item.name === openName) ?? null : null;
+        return (
+          <article className={notes.length ? "rail is-risk" : "rail"} key={`${path.kind}-${path.entry}-${pathIndex}`}>
+            <div className="rail-head">
+              <span>{path.kind === "job" ? "Schedule or message" : "Request"}</span>
+              <strong>{path.entry}</strong>
+            </div>
+            <div className="rail-line">
+              {path.hops.map((hop, index) => (
+                <span className="station-wrap" key={`${hop.role}-${hop.name}-${index}`}>
+                  {index > 0 && <i className={`join join-${hopTone(hop.role)}`} aria-hidden="true" />}
+                  <button
+                    type="button"
+                    className={["station", `st-${hopTone(hop.role)}`, picked === `${pathIndex}::${hop.name}` ? "is-on" : ""].filter(Boolean).join(" ")}
+                    onClick={() => onPick(`${pathIndex}::${hop.name}`)}
+                  >
+                    <small>{hop.role}</small>
+                    {hop.name}
+                  </button>
+                </span>
+              ))}
+            </div>
+            {open && <MethodPanel item={open} />}
+            {notes.map((finding, index) => (
+              <p className="rail-note" key={`${finding.kind}-${index}`}>
+                <span className={`tag tag-${finding.kind}`}>{kindLabel(finding.kind)}</span>
+                {finding.detail}
+              </p>
             ))}
-          </div>
-        </article>
-      ))}
+          </article>
+        );
+      })}
     </div>
   );
 }
 
-function Identity({ scan, meta }: { scan: ScanResult; meta: RepoMeta | null }) {
-  const identity = scan.overview?.identity;
-  const why = identity?.why || meta?.description || "";
-  return (
-    <div className="identity">
-      <p className="why">{why || "No README summary was found in this clone."}</p>
-      <div className="stack">
-        {(identity?.language || meta?.language) && <span className="stack-tag">{identity?.language || meta?.language}</span>}
-        {(identity?.stack ?? []).map((item) => <span className="stack-tag" key={item}>{item}</span>)}
-        {(identity?.license || meta?.license) && <span className="stack-tag">{identity?.license || meta?.license}</span>}
-        <span className="stack-tag">commit {scan.commit.slice(0, 12)}</span>
-        {meta?.stars != null && <span className="stack-tag">{meta.stars} stars</span>}
-        {meta?.contributors != null && <span className="stack-tag">{meta.contributors} contributors</span>}
-        {meta?.pushedAt && <span className="stack-tag">pushed {meta.pushedAt}</span>}
-      </div>
-    </div>
-  );
+function moduleName(id: string) {
+  return MODULE_LABEL[id] ?? id;
+}
+
+const DEP_ACCENT: Record<string, string> = {
+  "Web / API":      "var(--blue)",
+  "Data":           "#0e7a3d",
+  "Security":       "#9a3412",
+  "Messaging":      "#4b5bd4",
+  "Testing":        "#7c3aed",
+  "Observability":  "#0369a1",
+  "Cloud":          "#0891b2",
+  "Utilities":      "#57606a",
+};
+
+function depAccent(purpose: string): string {
+  for (const [key, color] of Object.entries(DEP_ACCENT)) {
+    if (purpose.toLowerCase().includes(key.toLowerCase().split(" / ")[0].toLowerCase())) {
+      return color;
+    }
+  }
+  return "var(--blue-deep)";
 }
 
 function Dependencies({ scan }: { scan: ScanResult }) {
   const deps = scan.overview?.dependencies;
-  if (!deps) return <p className="summary">Scan this repo again to list what it imports.</p>;
-  return (
-    <>
-      <h3 className="map-title">Inside the repo</h3>
-      <p>Which responsibility imports which. This stays at module level so the picture does not turn into a file hairball.</p>
-      {deps.internal.length === 0 ? (
-        <p className="summary">No cross-module imports were found.</p>
-      ) : (
-        <ul className="dep-list">
-          {deps.internal.map((edge) => (
-            <li key={`${edge.from}-${edge.to}`}>{edge.from} → {edge.to}</li>
-          ))}
-        </ul>
-      )}
-      <h3 className="map-title">Libraries</h3>
-      <div className="stack">
-        {deps.external.length === 0 && <p className="summary">No Maven or Gradle dependencies were found.</p>}
-        {deps.external.map((dep) => (
-          <span className="stack-tag" key={dep.name}>{dep.name} · {dep.usedFor}</span>
-        ))}
-      </div>
-    </>
-  );
-}
+  if (!deps) return <p className="summary">Map this repo again to read its build files.</p>;
 
-function EntryPoints({ scan }: { scan: ScanResult }) {
-  const entries = scan.overview?.entryPoints ?? [];
-  if (entries.length === 0) return <p className="summary">Scan this repo again to see where it starts.</p>;
+  if (deps.external.length === 0) {
+    return <p className="summary">No libraries found in the build file.</p>;
+  }
+
+  const groups = new Map<string, string[]>();
+  for (const dep of deps.external) {
+    const list = groups.get(dep.usedFor) ?? [];
+    list.push(dep.name);
+    groups.set(dep.usedFor, list);
+  }
+  const ranked = [...groups.entries()].sort((a, b) => b[1].length - a[1].length);
+
   return (
-    <div className="entry-list">
-      {entries.map((entry) => (
-        <article className="entry-card" key={`${entry.name}-${entry.detail}`}>
-          <h3>{entry.name}</h3>
-          <p>{entry.detail}</p>
-        </article>
-      ))}
+    <div className="dep-grid">
+      {ranked.map(([purpose, names]) => {
+        const accent = depAccent(purpose);
+        return (
+          <div className="dep-card" key={purpose} style={{ "--dep-accent": accent } as React.CSSProperties}>
+            <div className="dep-card-head">
+              <span className="dep-dot" aria-hidden="true" />
+              <strong>{purpose}</strong>
+              <span className="dep-count">{names.length}</span>
+            </div>
+            <ul className="dep-libs">
+              {names.map((name) => (
+                <li key={name}><code>{name}</code></li>
+              ))}
+            </ul>
+          </div>
+        );
+      })}
     </div>
   );
 }
 
-function Checklist({ scan }: { scan: ScanResult }) {
+function Runbook({ scan }: { scan: ScanResult }) {
+  const entries = scan.overview?.entryPoints ?? [];
   const steps = scan.overview?.checklist ?? [];
-  if (steps.length === 0) return <p className="summary">Scan this repo again to see how to run it.</p>;
+  if (!scan.overview) return <p className="summary">Map this repo again to see how it starts.</p>;
+  const starts = entries.filter((entry) => entry.detail.includes("Spring Boot application") || entry.name === "Docker");
+  const commands = steps.filter((step) => step.title !== "Set environment variables" && step.title !== "No setup file found");
+  const env = steps.find((step) => step.title === "Set environment variables");
+  const missing = steps.find((step) => step.title === "No setup file found");
   return (
-    <ol className="checklist">
-      {steps.map((step, index) => (
-        <li key={step.title}>
-          <span className="check-index">{index + 1}</span>
-          <span>
-            <strong>{step.title}</strong>
-            <span className="check-detail">{step.detail}</span>
-          </span>
-        </li>
-      ))}
-    </ol>
-  );
-}
-
-function Health({ scan, meta }: { scan: ScanResult; meta: RepoMeta | null }) {
-  const health = scan.overview?.health;
-  return (
-    <>
-      <div className="stat-row">
-        <div className="stat"><b>{health?.testFiles ?? "—"}</b><span>Test files</span></div>
-        <div className="stat"><b>{health?.workflows?.length ?? "—"}</b><span>CI workflows</span></div>
-        <div className="stat"><b>{meta?.openIssues ?? "—"}</b><span>Open issues</span></div>
-        <div className="stat"><b>{meta?.stars ?? "—"}</b><span>Stars</span></div>
+    <div className="runbook">
+      <div className="starts">
+        {starts.length === 0 && <p className="summary">No @SpringBootApplication class was found.</p>}
+        {starts.map((entry) => (
+          <article className="start-card" key={`${entry.name}-${entry.detail}`}>
+            <span>{entry.name === "Docker" ? "Container" : "Process starts in"}</span>
+            <strong>{entry.name}</strong>
+            <code>{entry.detail}</code>
+          </article>
+        ))}
       </div>
-      {health?.coverage && <p>{health.coverage}</p>}
-      {health?.workflows && health.workflows.length > 0 && (
-        <div className="stack">
-          {health.workflows.map((name) => <span className="stack-tag" key={name}>{name}</span>)}
+      {commands.length > 0 && (
+        <div className="run-grid">
+          {commands.map((step, index) => (
+            <article className="run-card" key={`${step.title}-${step.detail}`}>
+              <span>{String(index + 1).padStart(2, "0")}</span>
+              <small>{step.title}</small>
+              <code>{step.detail}</code>
+            </article>
+          ))}
         </div>
       )}
-      <p className="summary">{health?.churn || "Stars and open issues come from GitHub. File churn needs more than the one commit this scan clones."}</p>
-    </>
+      {env && (
+        <div className="env-block">
+          <h3>Environment</h3>
+          <div className="env-grid">
+            {env.detail.split(", ").map((name) => <code key={name}>{name}</code>)}
+          </div>
+        </div>
+      )}
+      {missing && <p className="summary">{missing.detail}</p>}
+    </div>
   );
 }
 
-const SECTIONS = [
-  { id: "identity", label: "Identity" },
-  { id: "modules", label: "Modules" },
-  { id: "flow", label: "Data flow" },
-  { id: "deps", label: "Dependencies" },
-  { id: "entry", label: "Entry points" },
-  { id: "critical", label: "Critical paths" },
-  { id: "checklist", label: "Checklist" },
-  { id: "health", label: "Health" },
-] as const;
+function HealthBoard({ scan, meta }: { scan: ScanResult; meta: RepoMeta | null }) {
+  const health = scan.overview?.health;
+  const tests = health?.testFiles ?? 0;
+  const workflows = health?.workflows ?? [];
+  const signals = [
+    {
+      name: "Tests",
+      state: tests > 0 ? "ok" : "miss",
+      detail: tests > 0 ? `${tests} Java file${tests === 1 ? "" : "s"} under src/test` : "No Java files under src/test",
+    },
+    {
+      name: "CI",
+      state: workflows.length > 0 ? "ok" : "miss",
+      detail: workflows.length > 0 ? workflows.join(", ") : "No GitHub workflow, Jenkinsfile, or GitLab CI file",
+    },
+    {
+      name: "Coverage",
+      state: health?.coverage ? "ok" : "unknown",
+      detail: health?.coverage || "No JaCoCo config in the Maven or Gradle files",
+    },
+    {
+      name: "Stars",
+      state: meta?.stars != null ? "ok" : "unknown",
+      detail: meta?.stars != null ? `${meta.stars.toLocaleString()} on GitHub` : "GitHub did not return a star count for this URL",
+    },
+    {
+      name: "Open issues",
+      state: meta?.openIssues != null ? "ok" : "unknown",
+      detail: meta?.openIssues != null ? `${meta.openIssues.toLocaleString()} open` : "GitHub did not return an issue count",
+    },
+    {
+      name: "Last push",
+      state: meta?.pushedAt ? "ok" : "unknown",
+      detail: meta?.pushedAt || "No push date from GitHub",
+    },
+    {
+      name: "Churn",
+      state: "unknown",
+      detail: health?.churn || "Only the latest commit is cloned, so the files that change most often are not in this scan.",
+    },
+  ];
+  return (
+    <ul className="signals">
+      {signals.map((signal) => (
+        <li key={signal.name}>
+          <i className={`dot dot-${signal.state}`} aria-hidden="true" />
+          <strong>{signal.name}</strong>
+          <span>{signal.detail}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
 
-type SectionId = (typeof SECTIONS)[number]["id"];
-
-function DetailPanel({ scan, onHome, sourceUrl }: { scan: ScanResult; onHome: () => void; sourceUrl?: string }) {
-  const [view, setView] = useState<SectionId>("identity");
+function DetailPanel({
+  scan,
+  sourceUrl,
+  section,
+}: {
+  scan: ScanResult;
+  sourceUrl?: string;
+  section: SectionId;
+}) {
   const [picked, setPicked] = useState<string | null>(null);
   const [meta, setMeta] = useState<RepoMeta | null>(null);
-  const [chart, setChart] = useState<"flow" | "conn" | "erd">("flow");
   const flowClasses = useMemo(() => parseFlow(scan.diagrams.architecture), [scan.diagrams.architecture]);
   const paths = useMemo(() => parsePaths(scan.diagrams.architecture), [scan.diagrams.architecture]);
-  const pickedClass = flowClasses.find((item) => item.name === picked) ?? null;
+  const stories = useMemo(() => parseStories(scan.diagrams.architecture), [scan.diagrams.architecture]);
+  const [routeIndex, setRouteIndex] = useState(0);
   const overview = scan.overview;
 
   useEffect(() => {
-    setView("identity");
     setPicked(null);
-    setChart("flow");
+    setRouteIndex(0);
   }, [scan.service, scan.commit]);
 
   useEffect(() => {
@@ -420,147 +564,200 @@ function DetailPanel({ scan, onHome, sourceUrl }: { scan: ScanResult; onHome: ()
     };
   }, [sourceUrl]);
 
-  const activeChart = chart === "conn" ? scan.diagrams.connections : chart === "erd" ? scan.diagrams.erd : scan.diagrams.architecture;
   const criticalPaths = paths.filter((path) => {
-    const gap = scan.endpoints.some((endpoint) => endpoint.scopeGap && endpoint.path && path.entry.includes(endpoint.path));
-    const hit = path.hops.some((hop) => scan.findings.some((finding) => finding.symbol.startsWith(hop.name)));
-    return gap || hit;
+    if (findingsForPath(path, scan.findings).length > 0) return true;
+    return scan.endpoints.some((endpoint) => endpoint.scopeGap && endpoint.path && path.entry.includes(endpoint.path));
   });
 
+  const pageTitle: Record<Exclude<SectionId, "overview">, { title: string; hint: string }> = {
+    modules: { title: "Architecture", hint: "Each card is a group of classes. The diagram under them is only the stored records." },
+    flow: { title: "Data flow", hint: "Pick a route. The sequence is the order of calls. Branches are the if and catch paths in the code. The transaction and trigger charts appear only when this route has them." },
+    deps: { title: "Dependencies", hint: "Which group uses which, then the libraries in the build file." },
+    entry: { title: "Entry points", hint: "If you want to run this, start here." },
+    critical: { title: "Critical paths", hint: "A route is listed when a finding names a class that route calls, or when that URL is marked as missing tenant scope." },
+    checklist: { title: "Entry points", hint: "If you want to run this, start here." },
+    health: { title: "Health", hint: "Test files and CI workflows from the repo. Stars and open issues from GitHub." },
+  };
+
   return (
-    <main className="workspace">
-      <div className="workspace-head">
-        <div>
-          <button type="button" className="back" onClick={onHome}>
-            All scans
-          </button>
-          <h2>{scan.service}</h2>
-          <p className="summary">
-            {scan.summary} · commit <code>{scan.commit.slice(0, 12)}</code>
-          </p>
-        </div>
-      </div>
-
-      <div className="stat-row">
-        <div className="stat">
-          <b>{scan.counts.scopeGaps}</b>
-          <span>Scope gaps</span>
-        </div>
-        <div className="stat">
-          <b>{scan.counts.nPlusOne}</b>
-          <span>N+1</span>
-        </div>
-        <div className="stat">
-          <b>{scan.counts.brokenRelations}</b>
-          <span>Broken</span>
-        </div>
-        <div className={`stat stat-risk risk-${scan.counts.risk}`}>
-          <b>{scan.counts.risk}</b>
-          <span>Score {scan.counts.score}</span>
-        </div>
-      </div>
-
-      <div className="tabbar" role="tablist" aria-label="What to show">
-        {SECTIONS.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            role="tab"
-            aria-selected={view === item.id}
-            className={view === item.id ? "tab is-on" : "tab"}
-            onClick={() => setView(item.id)}
-          >
-            {item.label}
-          </button>
-        ))}
-      </div>
-
-      <section className="diagram-block">
-        {view === "identity" && (
-          <Identity scan={scan} meta={meta} />
-        )}
-        {view === "modules" && (
-          overview?.moduleDiagram ? (
+    <div className="canvas">
+      {section === "overview" ? (
+        <OverviewBoard scan={scan} meta={meta} paths={paths} />
+      ) : (
+        <>
+          <h1>{pageTitle[section].title}</h1>
+          <p className="lede">{pageTitle[section].hint}</p>
+          <section className="diagram-block">
+        {section === "modules" && (
+          overview?.modules?.length ? (
             <>
-              <p>Boxes are responsibilities, not folders. Color is the layer: API, services, data, workers, and calls that leave the service.</p>
-              <MermaidDiagram chart={overview.moduleDiagram} id={`${scan.service}-modules`} />
+              <div className="arch-grid">
+                {overview.modules.map((mod) => (
+                  <article className={`arch-card mod-${mod.id}`} key={mod.id}>
+                    <header>
+                      <b>{moduleName(mod.id)}</b>
+                      <span>{MODULE_ABOUT[mod.id] ?? mod.label}</span>
+                    </header>
+                    <div className="chips">
+                      {(mod.classes ?? []).map((name) => <code key={name}>{name}</code>)}
+                    </div>
+                  </article>
+                ))}
+              </div>
+              {scan.diagrams.erd && (
+                <div className="erd-block">
+                  <h3>Stored records</h3>
+                  <p className="quiet">Each box is an @Entity. A line is a field that points at another entity.</p>
+                  <MermaidDiagram chart={scan.diagrams.erd} id={`${scan.service}-erd`} />
+                </div>
+              )}
             </>
           ) : (
-            <p className="summary">Scan this repo again to group the code into modules.</p>
+            <p className="summary">Map this repo again to group the code into modules.</p>
           )
         )}
-        {view === "flow" && (
-          <>
-            <p>Read each route left to right. Blue is a sync call, green is a database write or read, orange is a schedule or a message, and a dashed arrow leaves the service.</p>
-            <div className="lanes" aria-hidden="true">
-              <span><i className="lane lane-sync" /> Sync call</span>
-              <span><i className="lane lane-db" /> Database</span>
-              <span><i className="lane lane-async" /> Event or schedule</span>
-              <span><i className="lane lane-exit" /> External call</span>
-            </div>
-            {paths.length > 0 ? (
-              <PathList paths={paths} picked={picked} onPick={setPicked} />
-            ) : (
-              scan.diagrams.architecture && <p className="summary">Scan this repo again to see each route as its own path.</p>
-            )}
-            {pickedClass && <MethodPanel item={pickedClass} />}
-            {paths.length > 0 && !pickedClass && <p className="summary">Select a class in a path to read its methods.</p>}
-            <div className="chart-switch" role="tablist" aria-label="Diagram">
-              {([
-                ["flow", "Flow map"],
-                ["conn", "Connections"],
-                ["erd", "ERD"],
-              ] as const).map(([id, label]) => (
-                <button key={id} type="button" className={chart === id ? "tab is-on" : "tab"} onClick={() => setChart(id)}>
-                  {label}
-                </button>
-              ))}
-            </div>
-            {activeChart && (
+        {section === "flow" && (
+          paths.length > 0 ? (
+            <>
+              <div className="chart-switch" role="tablist" aria-label="Route">
+                {paths.map((path, index) => (
+                  <button
+                    key={`${path.entry}-${index}`}
+                    type="button"
+                    className={routeIndex === index ? "tab is-on" : "tab"}
+                    onClick={() => { setRouteIndex(index); setPicked(null); }}
+                  >
+                    {path.entry}
+                  </button>
+                ))}
+              </div>
+              <h3 className="map-title">Sequence</h3>
               <MermaidDiagram
-                chart={activeChart}
-                id={`${scan.service}-${chart}`}
-                selectable={chart === "flow" ? flowClasses.map((item) => item.name) : undefined}
-                active={chart === "flow" ? picked : null}
-                onPick={chart === "flow" ? setPicked : undefined}
+                chart={stories[routeIndex]?.sequence || sequenceFromPath(paths[routeIndex])}
+                id={`${scan.service}-seq-${routeIndex}`}
               />
-            )}
-          </>
+              {stories[routeIndex]?.transaction && (
+                <>
+                  <h3 className="map-title">Transaction</h3>
+                  <MermaidDiagram chart={stories[routeIndex].transaction} id={`${scan.service}-tx-${routeIndex}`} />
+                </>
+              )}
+              {stories[routeIndex]?.trigger && (
+                <>
+                  <h3 className="map-title">Database trigger</h3>
+                  <MermaidDiagram chart={stories[routeIndex].trigger} id={`${scan.service}-trig-${routeIndex}`} />
+                </>
+              )}
+              <FlowBoard paths={[paths[routeIndex]]} classes={flowClasses} picked={picked} onPick={setPicked} />
+              {!picked && <p className="summary">Select a stop to read its methods.</p>}
+            </>
+          ) : (
+            <p className="summary">Map this repo again. This result has no per-route trace yet.</p>
+          )
         )}
-        {view === "deps" && (
+        {section === "deps" && (
           <Dependencies scan={scan} />
         )}
-        {view === "entry" && (
-          <EntryPoints scan={scan} />
+        {section === "entry" && (
+          <Runbook scan={scan} />
         )}
-        {view === "critical" && (
+        {section === "critical" && (
           <>
-            <p>These are the risky paths inside the data flow, not a second map. A highlighted route touches a scope gap or another finding.</p>
+            <ul className="rule">
+              <li><b>N+1</b> A query runs inside a loop, on a class this route calls.</li>
+              <li><b>Scope gap</b> A repository method returns a tenant-owned record without a tenant id, or the URL is marked as missing scope.</li>
+              <li><b>Broken relation</b> An entity this route touches points at another entity in a way the fields do not match.</li>
+            </ul>
             {criticalPaths.length > 0 ? (
-              <PathList paths={criticalPaths} picked={picked} onPick={setPicked} />
+              <FlowBoard paths={criticalPaths} classes={flowClasses} picked={picked} onPick={setPicked} findings={scan.findings} />
             ) : (
-              <p className="summary">No route is tied to a finding yet.</p>
+              <p className="summary">{scan.findings.length === 0 ? "No findings on this repo, so no route is marked critical." : "Findings exist, but none of them name a class on a traced route."}</p>
             )}
-            {scan.findings.length === 0 ? (
-              <p className="summary">No findings.</p>
-            ) : (
-              scan.findings.map((f, i) => (
-                <div className="finding" key={i}>
-                  <span><span className={`tag tag-${f.kind}`}>{kindLabel(f.kind)}</span></span>
-                  <span>
-                    {f.symbol && <span className="mono">{f.symbol}</span>}
-                    {f.file && <span className="file">{f.file}</span>}
-                    {f.detail && <span>{f.symbol || f.file ? " — " : ""}{f.detail}</span>}
-                  </span>
-                </div>
-              ))
-            )}
-            <p className="summary">{overview?.health.churn}</p>
           </>
         )}
-        {view === "checklist" && <Checklist scan={scan} />}
-        {view === "health" && <Health scan={scan} meta={meta} />}
-      </section>
-    </main>
+        {section === "health" && <HealthBoard scan={scan} meta={meta} />}
+          </section>
+        </>
+      )}
+    </div>
   );
+}
+
+function RichLine({ text }: { text: string }) {
+  const clean = text.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
+  const pattern = /\*\*([^*]+)\*\*|`([^`]+)`|\*([^*]+)\*/g;
+  const nodes: React.ReactNode[] = [];
+  let last = 0;
+  let index = 0;
+  for (const match of clean.matchAll(pattern)) {
+    const start = match.index ?? 0;
+    if (start > last) nodes.push(clean.slice(last, start));
+    if (match[1] != null) nodes.push(<strong key={index}>{match[1]}</strong>);
+    else if (match[2] != null) nodes.push(<code key={index}>{match[2]}</code>);
+    else if (match[3] != null) nodes.push(<em key={index}>{match[3]}</em>);
+    last = start + match[0].length;
+    index += 1;
+  }
+  if (last < clean.length) nodes.push(clean.slice(last));
+  return <>{nodes}</>;
+}
+
+function OverviewBoard({
+  scan,
+  meta,
+  paths,
+}: {
+  scan: ScanResult;
+  meta: RepoMeta | null;
+  paths: FlowPath[];
+}) {
+  const overview = scan.overview;
+  const identity = overview?.identity;
+  const why = identity?.why || meta?.description || "";
+  const libraries = overview?.dependencies.external.length ?? 0;
+  const run = overview?.checklist.find((step) => step.title === "Run locally")?.detail
+    || overview?.checklist.find((step) => step.title === "Tests")?.detail
+    || "";
+  const figures: { value: string; label: string; tone?: string }[] = [
+    { value: String(paths.length || scan.endpoints.length), label: paths.length ? "Routes" : "Endpoints" },
+    { value: String(scan.entities.length), label: "Entities" },
+    { value: String(libraries), label: "Libraries" },
+  ];
+  if (scan.counts.scopeGaps) figures.push({ value: String(scan.counts.scopeGaps), label: "Scope gaps", tone: "hot" });
+  if (scan.counts.nPlusOne) figures.push({ value: String(scan.counts.nPlusOne), label: "N+1", tone: "hot" });
+  if (scan.counts.brokenRelations) figures.push({ value: String(scan.counts.brokenRelations), label: "Broken relations", tone: "hot" });
+  const metaBits = [
+    identity?.language || meta?.language || "",
+    (identity?.stack ?? []).join(", "),
+    identity?.license || meta?.license || "",
+    scan.commit ? scan.commit.slice(0, 12) : "",
+    meta?.stars != null ? `${formatCount(meta.stars)} stars` : "",
+    meta?.contributors != null ? `${formatCount(meta.contributors)} contributors` : "",
+    meta?.pushedAt ? `pushed ${meta.pushedAt}` : "",
+    run,
+  ].filter(Boolean);
+
+  return (
+    <div className="cover">
+      <div className="cover-head">
+        <p className="repo-name">Overview</p>
+        <h1>{scan.service}</h1>
+      </div>
+      {why && <p className="why"><RichLine text={why} /></p>}
+      <div className="figures">
+        {figures.map((item) => (
+          <div className={item.tone ? `figure is-${item.tone}` : "figure"} key={item.label}>
+            <b>{item.value}</b>
+            <span>{item.label}</span>
+          </div>
+        ))}
+      </div>
+      {metaBits.length > 0 && <p className="cover-meta">{metaBits.join("  ·  ")}</p>}
+    </div>
+  );
+}
+
+function formatCount(value: number) {
+  if (value >= 1000) return `${Math.round(value / 100) / 10}k`;
+  return String(value);
 }

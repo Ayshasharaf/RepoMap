@@ -82,6 +82,13 @@ export interface FlowPath {
   hops: FlowHop[];
 }
 
+export interface RouteStory {
+  entry: string;
+  sequence: string;
+  transaction: string;
+  trigger: string;
+}
+
 /** One line per route: %% path \t kind \t entry \t Role|Class \t ... */
 export function parsePaths(mermaid: string): FlowPath[] {
   if (!mermaid) return [];
@@ -101,4 +108,33 @@ export function parsePaths(mermaid: string): FlowPath[] {
     if (entry) paths.push({ kind, entry, hops });
   }
   return paths;
+}
+
+/** Per-route mermaid, one block per %% diagram index, in route order. */
+export function parseStories(mermaid: string): RouteStory[] {
+  if (!mermaid) return [];
+  const blocks = new Map<number, RouteStory>();
+  const ensure = (index: number) => {
+    let story = blocks.get(index);
+    if (!story) {
+      story = { entry: "", sequence: "", transaction: "", trigger: "" };
+      blocks.set(index, story);
+    }
+    return story;
+  };
+  for (const raw of mermaid.split("\n")) {
+    const line = raw.trim();
+    if (!line.startsWith("%% diagram\t")) continue;
+    const cols = line.slice("%% diagram\t".length).split("\t");
+    const index = Number(cols[0]);
+    if (!Number.isFinite(index)) continue;
+    const kind = cols[1];
+    const rest = cols.slice(2).join("\t");
+    const story = ensure(index);
+    if (kind === "entry") story.entry = rest;
+    else if (kind === "seq") story.sequence += (story.sequence ? "\n" : "") + rest;
+    else if (kind === "tx") story.transaction += (story.transaction ? "\n" : "") + rest;
+    else if (kind === "trigger") story.trigger += (story.trigger ? "\n" : "") + rest;
+  }
+  return [...blocks.entries()].sort((a, b) => a[0] - b[0]).map(([, story]) => story);
 }
