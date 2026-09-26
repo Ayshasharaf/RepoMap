@@ -308,6 +308,23 @@ function hopTone(role: string) {
   return "sync";
 }
 
+const ROLE_ICON: Record<string, string> = {
+  Controller:  "⬡",
+  Service:     "⚙",
+  Repository:  "🗄",
+  Entity:      "📦",
+  Outbound:    "↗",
+  Listener:    "📨",
+  Job:         "⏱",
+  Scheduler:   "⏱",
+  Component:   "◈",
+};
+
+function HopIcon({ role }: { role: string }) {
+  const icon = ROLE_ICON[role] ?? "◉";
+  return <span className="hop-icon" aria-hidden="true">{icon}</span>;
+}
+
 function FlowBoard({
   paths,
   classes,
@@ -323,6 +340,13 @@ function FlowBoard({
 }) {
   return (
     <div className="rails">
+      {/* legend */}
+      <div className="flow-legend">
+        <span className="fl-item fl-sync"><i />Sync call</span>
+        <span className="fl-item fl-db"><i />Database</span>
+        <span className="fl-item fl-async"><i />Async / job</span>
+        <span className="fl-item fl-exit"><i />Outbound</span>
+      </div>
       {paths.map((path, pathIndex) => {
         const notes = findingsForPath(path, findings ?? []);
         const openName = picked?.startsWith(`${pathIndex}::`) ? picked.slice(picked.indexOf("::") + 2) : "";
@@ -330,31 +354,72 @@ function FlowBoard({
         return (
           <article className={notes.length ? "rail is-risk" : "rail"} key={`${path.kind}-${path.entry}-${pathIndex}`}>
             <div className="rail-head">
-              <span>{path.kind === "job" ? "Schedule or message" : "Request"}</span>
+              <span className={`rail-kind-badge rk-${path.kind === "job" ? "job" : "http"}`}>
+                {path.kind === "job" ? "Schedule / Message" : "HTTP Request"}
+              </span>
               <strong>{path.entry}</strong>
+              <span className="rail-hop-count">{path.hops.length} step{path.hops.length !== 1 ? "s" : ""}</span>
             </div>
-            <div className="rail-line">
-              {path.hops.map((hop, index) => (
-                <span className="station-wrap" key={`${hop.role}-${hop.name}-${index}`}>
-                  {index > 0 && <i className={`join join-${hopTone(hop.role)}`} aria-hidden="true" />}
-                  <button
-                    type="button"
-                    className={["station", `st-${hopTone(hop.role)}`, picked === `${pathIndex}::${hop.name}` ? "is-on" : ""].filter(Boolean).join(" ")}
-                    onClick={() => onPick(`${pathIndex}::${hop.name}`)}
-                  >
-                    <small>{hop.role}</small>
-                    {hop.name}
-                  </button>
-                </span>
-              ))}
+
+            {/* Client origin node */}
+            <div className="flow-chain">
+              <div className="flow-origin">
+                <span className="fo-icon" aria-hidden="true">⬤</span>
+                <span className="fo-label">Client</span>
+              </div>
+              <div className="flow-arrow flow-arrow-down" aria-hidden="true">
+                <svg viewBox="0 0 16 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M8 0 L8 20" stroke="currentColor" strokeWidth="1.5" />
+                  <path d="M3 15 L8 22 L13 15" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+                </svg>
+              </div>
+
+              {path.hops.map((hop, index) => {
+                const tone = hopTone(hop.role);
+                const isOn = picked === `${pathIndex}::${hop.name}`;
+                const isLast = index === path.hops.length - 1;
+                const nextTone = isLast ? null : hopTone(path.hops[index + 1].role);
+                return (
+                  <div className="flow-step-wrap" key={`${hop.role}-${hop.name}-${index}`}>
+                    <button
+                      type="button"
+                      className={["flow-step", `fs-${tone}`, isOn ? "is-on" : ""].filter(Boolean).join(" ")}
+                      onClick={() => onPick(`${pathIndex}::${hop.name}`)}
+                    >
+                      <span className="fs-num">{index + 1}</span>
+                      <HopIcon role={hop.role} />
+                      <span className="fs-body">
+                        <span className="fs-role">{hop.role}</span>
+                        <span className="fs-name">{hop.name}</span>
+                      </span>
+                      <span className="fs-caret" aria-hidden="true">{isOn ? "▲" : "▼"}</span>
+                    </button>
+
+                    {isOn && open && <MethodPanel item={open} />}
+
+                    {!isLast && (
+                      <div className={`flow-arrow flow-arrow-down fa-${nextTone ?? tone}`} aria-hidden="true">
+                        <svg viewBox="0 0 16 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+                          <path d="M8 0 L8 20" stroke="currentColor" strokeWidth="1.5" />
+                          <path d="M3 15 L8 22 L13 15" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+                        </svg>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
-            {open && <MethodPanel item={open} />}
-            {notes.map((finding, index) => (
-              <p className="rail-note" key={`${finding.kind}-${index}`}>
-                <span className={`tag tag-${finding.kind}`}>{kindLabel(finding.kind)}</span>
-                {finding.detail}
-              </p>
-            ))}
+
+            {notes.length > 0 && (
+              <div className="rail-notes">
+                {notes.map((finding, index) => (
+                  <p className="rail-note" key={`${finding.kind}-${index}`}>
+                    <span className={`tag tag-${finding.kind}`}>{kindLabel(finding.kind)}</span>
+                    {finding.detail}
+                  </p>
+                ))}
+              </div>
+            )}
           </article>
         );
       })}
@@ -365,6 +430,118 @@ function FlowBoard({
 function moduleName(id: string) {
   return MODULE_LABEL[id] ?? id;
 }
+
+
+// ── module lane config ────────────────────────────────────────────────────────
+const MOD_COLOR: Record<string, string> = {
+  api:       "#173ded",
+  services:  "#123499",
+  data:      "#0e7a3d",
+  workers:   "#9a3412",
+  auth:      "#9a3412",
+  outbound:  "#4b5bd4",
+  config:    "#57606a",
+  app:       "#1c1f33",
+};
+
+const MOD_LANE: Record<string, "entry" | "logic" | "storage" | "support"> = {
+  api:      "entry",
+  workers:  "entry",
+  services: "logic",
+  auth:     "logic",
+  data:     "storage",
+  outbound: "support",
+  config:   "support",
+  app:      "support",
+};
+
+const LANE_LABEL: Record<string, string> = {
+  entry:   "Entry",
+  logic:   "Logic",
+  storage: "Storage",
+  support: "Support",
+};
+
+function ArchBoard({
+  modules,
+  erd,
+  service,
+}: {
+  modules: import("@/lib/types").OverviewModule[];
+  erd: string;
+  service: string;
+}) {
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  const lanes: Record<string, typeof modules> = { entry: [], logic: [], storage: [], support: [] };
+  for (const mod of modules) {
+    const lane = MOD_LANE[mod.id] ?? "support";
+    lanes[lane].push(mod);
+  }
+  const laneOrder = (["entry", "logic", "storage", "support"] as const).filter((l) => lanes[l].length > 0);
+
+  return (
+    <div className="arch-board">
+      <div className="arch-flow">
+        {laneOrder.map((lane, li) => (
+          <div className="arch-lane" key={lane}>
+            <div className="arch-lane-label">{LANE_LABEL[lane]}</div>
+            <div className="arch-lane-cards">
+              {lanes[lane].map((mod) => {
+                const color = MOD_COLOR[mod.id] ?? "#57606a";
+                const isOpen = expanded === mod.id;
+                const classes = mod.classes ?? [];
+                return (
+                  <button
+                    key={mod.id}
+                    type="button"
+                    className={`arch-mod${isOpen ? " is-open" : ""}`}
+                    style={{ "--mod-color": color } as React.CSSProperties}
+                    onClick={() => setExpanded(isOpen ? null : mod.id)}
+                    aria-expanded={isOpen}
+                  >
+                    <div className="arch-mod-top">
+                      <span className="arch-mod-dot" aria-hidden="true" />
+                      <span className="arch-mod-name">{moduleName(mod.id)}</span>
+                      <span className="arch-mod-count">{mod.files}</span>
+                    </div>
+                    <span className="arch-mod-about">{MODULE_ABOUT[mod.id] ?? mod.label}</span>
+                    {isOpen && classes.length > 0 && (
+                      <ul className="arch-mod-classes" onClick={(e) => e.stopPropagation()}>
+                        {classes.map((name) => <li key={name}><code>{name}</code></li>)}
+                      </ul>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+            {li < laneOrder.length - 1 && (
+              <div className="arch-arrow" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M5 12h14M13 6l6 6-6 6" />
+                </svg>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {erd && (
+        <div className="arch-erd">
+          <div className="arch-erd-head">
+            <span className="arch-erd-icon" aria-hidden="true">⬡</span>
+            <div>
+              <strong>Stored records</strong>
+              <span>Each box is an @Entity. A line is a field that points at another entity.</span>
+            </div>
+          </div>
+          <MermaidDiagram chart={erd} id={`${service}-erd`} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 const DEP_ACCENT: Record<string, string> = {
   "Web / API":      "var(--blue)",
@@ -570,7 +747,7 @@ function DetailPanel({
   });
 
   const pageTitle: Record<Exclude<SectionId, "overview">, { title: string; hint: string }> = {
-    modules: { title: "Architecture", hint: "Each card is a group of classes. The diagram under them is only the stored records." },
+    modules: { title: "Architecture", hint: "Read left to right: Entry receives requests, Logic does the work, Storage holds the data. Click any module to expand its classes." },
     flow: { title: "Data flow", hint: "Pick a route. The sequence is the order of calls. Branches are the if and catch paths in the code. The transaction and trigger charts appear only when this route has them." },
     deps: { title: "Dependencies", hint: "Which group uses which, then the libraries in the build file." },
     entry: { title: "Entry points", hint: "If you want to run this, start here." },
@@ -590,28 +767,7 @@ function DetailPanel({
           <section className="diagram-block">
         {section === "modules" && (
           overview?.modules?.length ? (
-            <>
-              <div className="arch-grid">
-                {overview.modules.map((mod) => (
-                  <article className={`arch-card mod-${mod.id}`} key={mod.id}>
-                    <header>
-                      <b>{moduleName(mod.id)}</b>
-                      <span>{MODULE_ABOUT[mod.id] ?? mod.label}</span>
-                    </header>
-                    <div className="chips">
-                      {(mod.classes ?? []).map((name) => <code key={name}>{name}</code>)}
-                    </div>
-                  </article>
-                ))}
-              </div>
-              {scan.diagrams.erd && (
-                <div className="erd-block">
-                  <h3>Stored records</h3>
-                  <p className="quiet">Each box is an @Entity. A line is a field that points at another entity.</p>
-                  <MermaidDiagram chart={scan.diagrams.erd} id={`${scan.service}-erd`} />
-                </div>
-              )}
-            </>
+            <ArchBoard modules={overview.modules} erd={scan.diagrams.erd} service={scan.service} />
           ) : (
             <p className="summary">Map this repo again to group the code into modules.</p>
           )
@@ -649,7 +805,7 @@ function DetailPanel({
                 </>
               )}
               <FlowBoard paths={[paths[routeIndex]]} classes={flowClasses} picked={picked} onPick={setPicked} />
-              {!picked && <p className="summary">Select a stop to read its methods.</p>}
+              {!picked && <p className="summary">Click any step to expand its methods inline.</p>}
             </>
           ) : (
             <p className="summary">Map this repo again. This result has no per-route trace yet.</p>
