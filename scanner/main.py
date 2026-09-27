@@ -99,7 +99,10 @@ def _persist(data: dict) -> None:
         # Use a safe filename: replace any path separators so e.g. "owner/repo" → "owner_repo"
         safe_name = data["service"].replace("/", "_").replace("\\", "_")
         dest = _SCANS_DIR / f"{safe_name}.json"
+        previous = _SCANS_DIR / f"{safe_name}.json.prev"
         payload = json.dumps(data, sort_keys=True, indent=2, ensure_ascii=False) + "\n"
+        if dest.exists():
+            previous.write_bytes(dest.read_bytes())
         dest.write_text(payload, encoding="utf-8")
     except Exception as exc:
         # Persistence failure must never kill the HTTP response.

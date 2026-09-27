@@ -10,11 +10,14 @@ interface Props {
   onPick?: (name: string) => void;
 }
 
-function matchClass(text: string, names: string[]): string | null {
-  const compact = text.replace(/\s+/g, "");
-  const ordered = [...names].sort((a, b) => b.length - a.length);
+function matchNode(node: Element, names: string[]): string | null {
+  const id = node.getAttribute("id") || "";
+  const compact = (node.textContent || "").replace(/\s+/g, "");
+  const ordered = [...names].sort((a, b) => b.replace(/\s+/g, "").length - a.replace(/\s+/g, "").length);
   for (const name of ordered) {
-    if (compact.endsWith(name)) return name;
+    const token = name.replace(/\s+/g, "");
+    if (!token) continue;
+    if (id.includes(token) || compact.endsWith(token) || compact.startsWith(token)) return name;
   }
   return null;
 }
@@ -86,7 +89,7 @@ export default function MermaidDiagram({ chart, id, selectable, active, onPick }
       container.innerHTML = "";
       const drawable = chart
         .split("\n")
-        .filter((line) => !line.startsWith("%% flow\t") && !line.startsWith("%% path\t"))
+        .filter((line) => !line.trimStart().startsWith("%%"))
         .join("\n");
 
       mermaid
@@ -107,7 +110,7 @@ export default function MermaidDiagram({ chart, id, selectable, active, onPick }
           }
           if (!names.length) return;
           svgEl.querySelectorAll("g.node").forEach((node) => {
-            const matched = matchClass(node.textContent || "", names);
+            const matched = matchNode(node, names);
             if (!matched) return;
             node.classList.add("is-class");
             node.setAttribute("data-class", matched);

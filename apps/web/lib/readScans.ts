@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { snapshotOf } from "./diff";
 import type { ScanResult } from "./types";
 
 /** `scans/` at the workspace root. Next runs with cwd `apps/web`. */
@@ -15,7 +16,7 @@ export async function readScans(): Promise<ScanResult[]> {
   const scansDir = scansDirectory();
   let files: string[];
   try {
-    files = fs.readdirSync(scansDir).filter((f) => f.endsWith(".json"));
+    files = fs.readdirSync(scansDir).filter((f) => f.endsWith(".json") && !f.endsWith(".prev"));
   } catch {
     return [];
   }
@@ -24,7 +25,10 @@ export async function readScans(): Promise<ScanResult[]> {
   for (const file of files) {
     try {
       const raw = fs.readFileSync(path.join(scansDir, file), "utf8");
-      results.push(JSON.parse(raw) as ScanResult);
+      const scan = JSON.parse(raw) as ScanResult;
+      const previous = readPrevious(path.join(scansDir, `${file}.prev`));
+      if (previous) scan.previous = previous;
+      results.push(scan);
     } catch {
       // skip malformed files
     }
@@ -33,4 +37,14 @@ export async function readScans(): Promise<ScanResult[]> {
   // sort by service name
   results.sort((a, b) => a.service.localeCompare(b.service));
   return results;
+}
+
+function readPrevious(filePath: string) {
+  try {
+    const raw = JSON.parse(fs.readFileSync(filePath, "utf8")) as ScanResult;
+    if (!raw?.counts || !Array.isArray(raw.findings)) return undefined;
+    return snapshotOf(raw);
+  } catch {
+    return undefined;
+  }
 }

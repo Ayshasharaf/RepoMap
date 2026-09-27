@@ -9,6 +9,7 @@ Writes  scans/<service>.json  where <service> is the directory basename.
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -992,6 +993,7 @@ def _scan_flow(java_files: list[Path], entities: dict, root: str = "") -> tuple[
     for path in java_files:
         tree, _ = _parse(path)
         if tree is None:
+            nodes.setdefault(path.stem, (_relative(path, root), None))
             continue
         for _, cls in tree.filter(javalang.tree.ClassDeclaration):
             nodes[cls.name] = (_relative(path, root), cls)
@@ -1159,141 +1161,208 @@ def _scan_flow(java_files: list[Path], entities: dict, root: str = "") -> tuple[
     return chains, classes
 
 
+_GROUP_TITLE = {
+    "api": "HTTP API",
+    "domain": "Application",
+    "helpers": "Helpers",
+    "data": "Persistence",
+    "jobs": "Jobs",
+    "outside": "Outside",
+}
+_GROUP_TONE = {
+    "api": "toneBlue",
+    "domain": "toneAmber",
+    "helpers": "toneRose",
+    "data": "toneMint",
+    "jobs": "toneIndigo",
+    "outside": "toneTeal",
+}
+_GROUP_ORDER = ("api", "domain", "helpers", "jobs", "data", "outside")
+
+
+def _component_group(name: str, role: str) -> str | None:
+    del name
+    if role == "Entity":
+        return None
+    if role == "Controller":
+        return "api"
+    if role == "Repository":
+        return "data"
+    if role == "Outbound":
+        return "outside"
+    if role == "Job":
+        return "jobs"
+    if role == "Helper":
+        return "helpers"
+    return "domain"
+
+
+def _pretty_component(name: str, role: str) -> str:
+    stem = name
+    for suffix in ("Controller", "Service", "Repository", "Handler", "Advice"):
+        if stem.endswith(suffix) and len(stem) > len(suffix):
+            stem = stem[: -len(suffix)]
+            break
+    words = [word.lower() for word in re.findall(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+", stem)]
+    text = " ".join(words).strip()
+    role_word = {"Controller": "controller", "Service": "service", "Repository": "repository"}.get(role, "")
+    if role_word and text and not text.lower().endswith(role_word):
+        text = f"{text} {role_word}"
+    if not text:
+        return name
+    return text[:1].upper() + text[1:]
+
+
+def _arrow_text(dst_role: str) -> str:
+    if dst_role == "Repository":
+        return "reads and writes"
+    if dst_role == "Outbound":
+        return "calls out"
+    return "calls"
+
+
+def _database_name(flow: list[dict]) -> str:
+    for step in flow:
+        if "participant PostgreSQL" in (step.get("sequence") or ""):
+            return "PostgreSQL"
+    return "Database"
+
+
+def _node_id(name: str) -> str:
+    return "node_" + _mermaid_id(name)
+
+
+def _system_diagram(flow: list[dict], classes: list[dict], endpoints: list[dict], entities: dict) -> list[str]:
+    """One box per component. Routes share a class instead of copying it."""
+    described = {item.get("name"): item for item in classes if item.get("name")}
+    roles: dict[str, str] = {}
+    files: dict[str, str] = {}
+    for name, entity in entities.items():
+        if entity.get("file"):
+            files[name] = entity["file"]
+
+    def remember(name: str, role: str) -> None:
+        if not name:
+            return
+        info = described.get(name) or {}
+        roles[name] = info.get("role") or roles.get(name) or role or "Code"
+        if info.get("file"):
+            files[name] = info["file"]
+
+    for info in classes:
+        remember(info.get("name") or "", info.get("role") or "Code")
+    for step in flow:
+        remember(step.get("owner") or "", step.get("owner_role") or "Code")
+        for call in step.get("calls") or []:
+            remember(call.get("from") or "", "Code")
+            remember(call.get("to") or "", call.get("role") or "Code")
+    if not roles and endpoints:
+        for index, endpoint in enumerate(endpoints):
+            label = f"{endpoint.get('method') or 'GET'} {endpoint.get('path') or '/'}"
+            roles[f"endpoint_{index}"] = "Controller"
+            files[f"endpoint_{index}"] = ""
+            described[f"endpoint_{index}"] = {"name": label, "role": "Controller"}
+
+    drawn = {name: role for name, role in roles.items() if _component_group(name, role)}
+    lines = [
+        "flowchart TD",
+        "  classDef toneNeutral fill:#f8fafc,stroke:#334155,stroke-width:1.5px,color:#0f172a",
+        "  classDef toneBlue fill:#dbeafe,stroke:#2563eb,stroke-width:1.5px,color:#172554",
+        "  classDef toneAmber fill:#fef3c7,stroke:#d97706,stroke-width:1.5px,color:#78350f",
+        "  classDef toneMint fill:#dcfce7,stroke:#16a34a,stroke-width:1.5px,color:#14532d",
+        "  classDef toneRose fill:#ffe4e6,stroke:#e11d48,stroke-width:1.5px,color:#881337",
+        "  classDef toneIndigo fill:#e0e7ff,stroke:#4f46e5,stroke-width:1.5px,color:#312e81",
+        "  classDef toneTeal fill:#ccfbf1,stroke:#0f766e,stroke-width:1.5px,color:#134e4a",
+    ]
+    if not drawn:
+        return lines
+
+    buckets: dict[str, list[str]] = {key: [] for key in _GROUP_ORDER}
+    for name in sorted(drawn):
+        buckets[_component_group(name, drawn[name]) or "domain"].append(name)
+
+    has_controller = any(role == "Controller" for role in drawn.values())
+    has_job = any(_component_group(name, role) == "jobs" for name, role in drawn.items())
+    has_repo = any(role == "Repository" for role in drawn.values())
+    db_name = _database_name(flow)
+
+    if has_controller:
+        lines.append('  node_caller(("API client"))')
+    if has_job:
+        lines.append('  node_trigger(("Scheduler"))')
+
+    tone_members: dict[str, list[str]] = {tone: [] for tone in _GROUP_TONE.values()}
+    if has_controller:
+        tone_members["toneBlue"].append("node_caller")
+    if has_job:
+        tone_members["toneIndigo"].append("node_trigger")
+
+    for key in _GROUP_ORDER:
+        names = buckets[key]
+        if not names:
+            continue
+        lines.append(f'  subgraph group_{key}["{_GROUP_TITLE[key]}"]')
+        for name in names:
+            nid = _node_id(name)
+            label = _pretty_component(name, drawn[name]) if not name.startswith("endpoint_") else (described.get(name) or {}).get("name") or name
+            lines.append(f'    {nid}["{_mermaid_label(label)}"]')
+            tone_members[_GROUP_TONE[key]].append(nid)
+        lines.append("  end")
+
+    if has_repo:
+        lines.append(f'  node_database[("{_mermaid_label(db_name)}")]')
+        tone_members["toneAmber"].append("node_database")
+
+    edges: list[tuple[str, str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add_edge(src: str, dst: str, label: str) -> None:
+        if not src or not dst or src == dst or (src, dst) in seen:
+            return
+        seen.add((src, dst))
+        edges.append((src, dst, label))
+
+    for name, role in sorted(drawn.items()):
+        if role == "Controller":
+            add_edge("node_caller", _node_id(name), "calls REST API")
+        if _component_group(name, role) == "jobs":
+            add_edge("node_trigger", _node_id(name), "starts")
+        if role == "Repository":
+            add_edge(_node_id(name), "node_database", "persists")
+
+    for step in flow:
+        for call in step.get("calls") or []:
+            src = call.get("from") or ""
+            dst = call.get("to") or ""
+            dst_role = roles.get(dst, call.get("role") or "Code")
+            if src not in drawn or dst not in drawn:
+                continue
+            add_edge(_node_id(src), _node_id(dst), _arrow_text(dst_role))
+
+    def edge_rank(item: tuple[str, str, str]) -> tuple:
+        return (item[0], item[1], item[2])
+
+    for src, dst, label in sorted(edges, key=edge_rank):
+        lines.append(f'  {src} -->|"{_mermaid_label(label)}"| {dst}')
+
+    for tone, members in tone_members.items():
+        if members:
+            lines.append(f"  class {','.join(members)} {tone}")
+
+    for name in sorted(drawn):
+        file = files.get(name) or ""
+        if file:
+            lines.append(f"%% href\t{_node_id(name)}\t{file}")
+    return lines
+
+
 def _make_diagrams(entities: dict, relations: list[dict], endpoints: list[dict], flow: list[dict] | None = None, classes: list[dict] | None = None) -> dict:
     # Always emit a node per entity. A graph that is only a %% comment draws nothing.
     names = sorted(entities)
     declared = {(r["from"], r["to"]) for r in relations}
     inferred = [link for link in _infer_links(entities) if (link[0], link[1]) not in declared]
 
-    arch_lines = [
-        "flowchart LR",
-        "  classDef api   fill:#edf1ff,stroke:#173ded,color:#0a0b14",
-        "  classDef job   fill:#e6edff,stroke:#4b5bd4,color:#0a0b14",
-        "  classDef code  fill:#ffffff,stroke:#173ded,color:#0a0b14",
-        "  classDef entity fill:#f4f6ff,stroke:#123499,color:#0a0b14",
-        "  classDef outbound fill:#fff7ed,stroke:#9a3412,color:#0a0b14",
-    ]
-    groups: dict[str, list[str]] = {"entry": [], "application": [], "data": [], "outside": []}
-    group_title = {
-        "entry": "Entry",
-        "application": "Application",
-        "data": "Data",
-        "outside": "Outside",
-    }
-    seen_nodes: set[str] = set()
-    seen_edges: set[tuple[str, str, str]] = set()
-    class_lines: list[str] = []
-    edge_lines: list[str] = []
-    edge_styles: list[str] = []
-
-    def add_node(node_id: str, role: str, label: str, kind: str, group: str, extra_lines: list[str] | None = None) -> str:
-        nid = _mermaid_id(node_id)
-        if nid not in seen_nodes:
-            lines = [f"{role}<br/>{_mermaid_label(label)}"]
-            for extra in extra_lines or []:
-                lines.append(_mermaid_label(extra))
-            text = "<br/>".join(lines)
-            groups[group].append(f'    {nid}["{text}"]')
-            class_lines.append(f"  class {nid} {kind}")
-            seen_nodes.add(nid)
-        return nid
-
-    def add_edge(left: str | None, right: str | None, dashed: bool = False, label: str = "", kind: str = "sync") -> None:
-        if not left or not right or left == right:
-            return
-        key = (left, right, "dash" if dashed else "solid")
-        if key in seen_edges:
-            return
-        if dashed:
-            arrow = f"-. {_mermaid_label(label)} .->" if label else "-.->"
-        else:
-            arrow = f"-- {_mermaid_label(label)} -->" if label else "-->"
-        edge_lines.append(f"  {left} {arrow} {right}")
-        stroke = {"sync": "#173ded", "db": "#0e7a3d", "async": "#9a3412", "exit": "#4b5bd4"}.get(kind, "#173ded")
-        edge_styles.append(f"  linkStyle {len(edge_styles)} stroke:{stroke},stroke-width:2px")
-        seen_edges.add(key)
-
-    if flow:
-        # Merge routes only when they call the same classes. A charge route must
-        # not inherit the clients used by a different method on the same controller.
-        grouped: dict[tuple, list[dict]] = {}
-        order: list[tuple] = []
-        for step in flow:
-            call_key = tuple((call["from"], call["to"], call["role"]) for call in step.get("calls") or [])
-            key = (step.get("entry_kind"), step.get("owner"), call_key)
-            if key not in grouped:
-                grouped[key] = []
-                order.append(key)
-            grouped[key].append(step)
-
-        for index, key in enumerate(order):
-            steps = grouped[key]
-            local: dict[str, str] = {}
-
-            def place(name: str, role: str, suffix: int = index, bucket: dict[str, str] = local) -> str:
-                if name in bucket:
-                    return bucket[name]
-                if role == "Entity":
-                    group, kind = "data", "entity"
-                elif role == "Repository":
-                    group, kind = "data", "code"
-                elif role == "Outbound":
-                    group, kind = "outside", "outbound"
-                else:
-                    group, kind = "application", "code"
-                nid = add_node(f"{name}_{suffix}", role, name, kind, group)
-                bucket[name] = nid
-                return nid
-
-            entry_kind = steps[0].get("entry_kind") or "request"
-            labels = [step.get("entry") or "entry" for step in steps]
-            if len(labels) == 1:
-                role = "Request" if entry_kind == "request" else "Starts"
-                entry_nid = add_node(f"entry{index}", role, labels[0], "job" if entry_kind == "job" else "api", "entry")
-            else:
-                entry_nid = add_node(
-                    f"entry{index}", "Routes", labels[0], "api", "entry", extra_lines=labels[1:4],
-                )
-            def flow_kind(role: str, target: str) -> str:
-                if role in ("Repository", "Entity"):
-                    return "db"
-                if role == "Outbound":
-                    if any(token in target for token in ("Kafka", "Rabbit", "Jms")):
-                        return "async"
-                    return "exit"
-                if entry_kind == "job":
-                    return "async"
-                return "sync"
-
-            owner = steps[0].get("owner")
-            if owner:
-                add_edge(entry_nid, place(owner, steps[0].get("owner_role") or "Code"), kind=flow_kind(steps[0].get("owner_role") or "", owner))
-            for call in steps[0].get("calls") or []:
-                target = place(call["to"], call["role"])
-                source = local.get(call["from"]) or place(call["from"], "Code")
-                add_edge(source, target, dashed=call["role"] == "Outbound", kind=flow_kind(call["role"], call["to"]))
-    else:
-        for name in names:
-            add_node(name, "Entity", name, "entity", "data")
-        for i, ep in enumerate(endpoints):
-            entity = ep.get("entity") or _entity_from_path(ep.get("path") or "", names)
-            method = ep.get("method") or ""
-            raw_path = ep.get("path") or "/"
-            short_path = raw_path[:35] + "…" if len(raw_path) > 38 else raw_path
-            label = f"{method} {short_path}".strip()
-            request = add_node(f"ep{i}", "Request", label, "api", "entry")
-            if entity and entity in entities:
-                add_edge(request, add_node(entity, "Entity", entity, "entity", "data"), kind="db")
-
-    for key, title in group_title.items():
-        if not groups[key]:
-            continue
-        arch_lines.append(f"  subgraph {key} [{title}]")
-        arch_lines.extend(groups[key])
-        arch_lines.append("  end")
-    arch_lines.extend(class_lines)
-    arch_lines.extend(edge_lines)
-    arch_lines.extend(edge_styles)
+    arch_lines = _system_diagram(flow or [], classes or [], endpoints, entities)
     for info in classes or []:
         arch_lines.extend(_class_comment_lines(info))
     for step in flow or []:

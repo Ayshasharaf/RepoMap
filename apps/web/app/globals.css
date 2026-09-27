@@ -733,6 +733,23 @@ a { color: var(--primary); }
 .sketch-rooms b:nth-child(2) { color: var(--logic); }
 .sketch-rooms b:nth-child(3) { color: var(--ok); }
 
+.sketch-table {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+}
+
+.sketch-table span {
+  display: block;
+  height: 8px;
+  border-radius: 8px;
+  background: var(--border);
+}
+
+.sketch-table span:first-child { width: 72%; background: var(--deep); }
+.sketch-table span:nth-child(2) { width: 88%; }
+
 .sketch-rail span, .sketch-risk span, .sketch-signals s {
   display: block;
   height: 8px;
@@ -982,6 +999,147 @@ a.finding-file:active { color: var(--deep); }
 .tag-scope_gap, .tag-broken_relation { background: var(--risk-soft); color: var(--risk); }
 .tag-n_plus_one, .tag-parse_error { background: var(--warn-soft); color: var(--warn); }
 .tag-incomplete { background: var(--logic-soft); color: var(--logic); }
+
+.scan-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.btn-ghost {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.btn-ghost:hover { border-color: var(--primary); color: var(--primary); }
+
+.diff-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: var(--pad);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.diff-head p { margin: 4px 0 0; color: var(--muted); }
+
+.diff-stats {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
+}
+
+.diff-stats article {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.diff-stats span, .diff-stats em {
+  color: var(--muted);
+  font-style: normal;
+  font-size: 12px;
+}
+
+.diff-stats strong { font-size: 16px; }
+
+.finding-card.is-removed { opacity: 0.72; }
+
+.endpoint-board { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+
+.endpoint-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.endpoint-search {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  flex: 1;
+  min-width: min(100%, 220px);
+}
+
+.endpoint-search input {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.method-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.method-filters button {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.method-filters button.is-on {
+  border-color: var(--primary);
+  background: var(--logic-soft);
+  color: var(--primary);
+}
+
+.endpoint-scroll { overflow-x: auto; }
+
+.endpoint-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.endpoint-table th {
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.endpoint-table td {
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.endpoint-table code { font-family: var(--font-mono); font-size: 13px; }
+
+.method {
+  display: inline-block;
+  min-width: 52px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+  background: var(--logic-soft);
+  color: var(--logic);
+}
+
+.method-get { background: var(--ok-soft); color: var(--ok); }
+.method-delete { background: var(--risk-soft); color: var(--risk); }
+.method-put, .method-patch { background: var(--warn-soft); color: var(--warn); }
 
 /* =========================================================
    Architecture board
@@ -1697,6 +1855,67 @@ button.flow-step.is-on {
 /* =========================================================
    Diagram scroll
    ========================================================= */
+
+.diagram-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.diagram-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.diagram-canvas {
+  min-height: 480px;
+  max-height: 78vh;
+  overflow: auto;
+  padding: 28px 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background-color: #fff;
+  background-image:
+    linear-gradient(to right, rgba(23, 61, 237, 0.06) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(23, 61, 237, 0.06) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+.diagram-zoom { width: max-content; min-width: 100%; }
+
+.diagram-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.diagram-detail div { display: flex; align-items: baseline; gap: 10px; }
+.diagram-detail span, .diagram-detail p { color: var(--muted); }
+.diagram-detail a { color: var(--primary); font-weight: 600; }
+.diagram-detail ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.diagram-detail li { font-size: 13px; }
+
+.diagram-scroll svg g.node.is-class { cursor: pointer; }
+.diagram-scroll svg g.node.is-picked rect,
+.diagram-scroll svg g.node.is-picked polygon,
+.diagram-scroll svg g.node.is-picked path {
+  stroke: #173ded !important;
+  stroke-width: 2.5px !important;
+}
 
 .diagram-scroll {
   max-width: 100%;

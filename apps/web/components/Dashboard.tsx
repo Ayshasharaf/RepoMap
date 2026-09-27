@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ScanResult, RepoMeta } from "@/lib/types";
 import type { FlowClass, FlowPath } from "@/lib/flow";
+import { compareScans, snapshotOf } from "@/lib/diff";
 import { parseFlow, parsePaths, parseStories } from "@/lib/flow";
 import MermaidDiagram from "./MermaidDiagram";
 
@@ -55,12 +56,13 @@ function kindLabel(kind: string) {
   }[kind] ?? kind;
 }
 
-type SectionId = "overview" | "modules" | "flow" | "deps" | "entry" | "critical" | "health";
+type SectionId = "overview" | "modules" | "flow" | "endpoints" | "deps" | "entry" | "critical" | "health";
 
 const NAV: { id: SectionId; label: string; hint: string; icon: string }[] = [
   { id: "overview",  label: "Overview",        hint: "What this repo is",         icon: "M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" },
   { id: "modules",   label: "Architecture",     hint: "Modules and imports",       icon: "M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" },
   { id: "flow",      label: "Data flow",        hint: "The full call chain",       icon: "M13 10V3L4 14h7v7l9-11h-7z" },
+  { id: "endpoints", label: "Endpoints",        hint: "Every HTTP route",          icon: "M4 6h16M4 12h16M4 18h10" },
   { id: "deps",      label: "Dependencies",     hint: "Libraries and links",       icon: "M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" },
   { id: "entry",     label: "Entry points",     hint: "How to run it",             icon: "M5 3l14 9-14 9V3z" },
   { id: "critical",  label: "Critical paths",   hint: "Routes with findings",      icon: "M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" },
@@ -71,6 +73,7 @@ const PREVIEWS = [
   { label: "Overview",       hint: "What this repo is, before any diagram.",                                  sketch: "cover" },
   { label: "Architecture",   hint: "Modules by responsibility, and how they import each other.",              sketch: "rooms" },
   { label: "Data flow",      hint: "Each route as a line of stops, from the request to storage.",             sketch: "rail" },
+  { label: "Endpoints",      hint: "A filterable list of every HTTP route.",                                 sketch: "table" },
   { label: "Dependencies",   hint: "Libraries on shelves, named by what they are for.",                      sketch: "shelves" },
   { label: "Entry points",   hint: "The class that starts it, and the command that runs it.",                 sketch: "term" },
   { label: "Critical paths", hint: "Only the routes that sit next to a finding.",                            sketch: "risk" },
@@ -161,9 +164,11 @@ export default function Dashboard({ initialScans }: { initialScans: ScanResult[]
         ? await readScanStream(res, setPhase)
         : (await res.json()) as ScanResult;
       const savedUrl = result.source || trimmed;
-      setScans((prev) => [result, ...prev.filter((s) => s.service !== result.service)]);
+      const previous = scans.find((scan) => scan.service === result.service);
+      const nextResult = previous ? { ...result, previous: snapshotOf(previous) } : result;
+      setScans((prev) => [nextResult, ...prev.filter((s) => s.service !== result.service)]);
       setSources((prev) => ({ ...prev, [result.service]: savedUrl }));
-      setSelected(result);
+      setSelected(nextResult);
       setSection("overview");
       setUrl("");
     } catch (err: unknown) {
@@ -210,7 +215,7 @@ export default function Dashboard({ initialScans }: { initialScans: ScanResult[]
           <div className="plaque-inner">
             <div className="kicker">Paste a repo</div>
             <h1>See how it is built.</h1>
-            <p>Map a public Spring Boot Java repository on GitHub. Then choose Overview, Architecture, Data flow, Dependencies, Entry points, Critical paths, or Health.</p>
+            <p>Map a public Spring Boot Java repository on GitHub. Then choose Overview, Architecture, Data flow, Endpoints, Dependencies, Entry points, Critical paths, or Health.</p>
             <p className="lang-note">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{display:"inline",verticalAlign:"-2px",marginRight:"5px"}}><circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/></svg>
               Spring Boot Java only. Other languages will return an unscored result.
@@ -239,7 +244,7 @@ export default function Dashboard({ initialScans }: { initialScans: ScanResult[]
         </section>
         <section className="previews">
           <p className="section-kicker">After you map it</p>
-          <h2>Seven readings of the same repo.</h2>
+          <h2>Eight readings of the same repo.</h2>
           <div className="preview-grid">
             {PREVIEWS.map((item) => (
               <article className="preview" key={item.label}>
@@ -247,6 +252,7 @@ export default function Dashboard({ initialScans }: { initialScans: ScanResult[]
                   {item.sketch === "cover" && <><i /><i /><i /><i /></>}
                   {item.sketch === "rooms" && <><b>API</b><b>Services</b><b>Data</b></>}
                   {item.sketch === "rail" && <><span /><span /><span /></>}
+                  {item.sketch === "table" && <><span /><span /><span /></>}
                   {item.sketch === "shelves" && <><em>Database</em><em>Queue</em><em>Auth</em></>}
                   {item.sketch === "term" && <code>./mvnw spring-boot:run</code>}
                   {item.sketch === "risk" && <><span /><span className="is-hot" /><span /></>}
@@ -534,152 +540,151 @@ function moduleName(id: string) {
   return MODULE_LABEL[id] ?? id;
 }
 
-const EMPTY_EDGES: { from: string; to: string }[] = [];
-
-const MOD_LANE: Record<string, "entry" | "logic" | "storage" | "support"> = {
-  api:      "entry",
-  workers:  "entry",
-  services: "logic",
-  auth:     "logic",
-  data:     "storage",
-  outbound: "support",
-  config:   "support",
-  app:      "support",
-};
-
-const LANE_LABEL: Record<string, string> = {
-  entry:   "Entry",
-  logic:   "Logic",
-  storage: "Storage",
-  support: "Support",
-};
-
-function moduleTone(id: string) {
-  if (id === "data") return "is-db";
-  if (id === "services") return "is-logic";
-  if (id === "auth") return "is-risk";
-  return "";
+function diagramSource(chart: string, sourceUrl?: string, commit?: string) {
+  const base = (sourceUrl || "").replace(/\.git$/, "");
+  const sha = commit && commit !== "local" ? commit : "main";
+  const body: string[] = [];
+  const clicks: string[] = [];
+  for (const line of chart.split("\n")) {
+    if (line.startsWith("%% href\t")) {
+      const [, id, file] = line.split("\t");
+      if (base && id && file) clicks.push(`  click ${id} "${base}/blob/${sha}/${file}" _blank`);
+      continue;
+    }
+    if (line.trimStart().startsWith("%%")) continue;
+    body.push(line);
+  }
+  return [...body, ...clicks].join("\n").trim();
 }
+
+type DiagramView = "system" | "modules";
 
 function ArchBoard({
   modules,
-  edges,
+  chart,
+  moduleChart,
   erd,
   service,
+  classes,
+  sourceUrl,
+  commit,
 }: {
   modules: import("@/lib/types").OverviewModule[];
-  edges: { from: string; to: string }[];
+  chart: string;
+  moduleChart: string;
   erd: string;
   service: string;
+  classes: FlowClass[];
+  sourceUrl?: string;
+  commit: string;
 }) {
-  const [expanded, setExpanded] = useState<string | null>(null);
-  const flowRef = useRef<HTMLDivElement>(null);
-  const [wires, setWires] = useState<string[]>([]);
+  const systemChart = diagramSource(chart, sourceUrl, commit);
+  const modulesChart = diagramSource(moduleChart);
+  const [view, setView] = useState<DiagramView>(systemChart ? "system" : "modules");
+  const [picked, setPicked] = useState<string | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [copied, setCopied] = useState(false);
 
-  const lanes: Record<string, typeof modules> = { entry: [], logic: [], storage: [], support: [] };
-  for (const mod of modules) {
-    const lane = MOD_LANE[mod.id] ?? "support";
-    lanes[lane].push(mod);
-  }
-  const laneOrder = (["entry", "logic", "storage", "support"] as const).filter((l) => lanes[l].length > 0);
-  const moduleOrder = ["api", "workers", "auth", "services", "data", "outbound", "config", "app"];
-  for (const lane of laneOrder) {
-    lanes[lane].sort((a, b) => {
-      const ai = moduleOrder.indexOf(a.id);
-      const bi = moduleOrder.indexOf(b.id);
-      return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
-    });
-  }
-  const edgeKey = edges.map((edge) => `${edge.from}>${edge.to}`).join("|");
+  useEffect(() => {
+    setView(systemChart ? "system" : "modules");
+    setPicked(null);
+    setZoom(1);
+  }, [service, commit, systemChart, modulesChart]);
 
-  useLayoutEffect(() => {
-    const root = flowRef.current;
-    if (!root) return;
-    const measure = () => {
-      const box = root.getBoundingClientRect();
-      let bus = 0;
-      const next = edges.flatMap((edge) => {
-        const from = root.querySelector<HTMLElement>(`[data-mod="${edge.from}"]`);
-        const to = root.querySelector<HTMLElement>(`[data-mod="${edge.to}"]`);
-        if (!from || !to) return [];
-        const a = from.getBoundingClientRect();
-        const b = to.getBoundingClientRect();
-        const round = (value: number) => Math.round(value);
-        const forward = b.left >= a.right - 4;
-        const x1 = round(a.right - box.left);
-        const y1 = round(a.top + a.height / 2 - box.top);
-        const x2 = round(b.left - box.left) - 8;
-        const y2 = round(b.top + b.height / 2 - box.top);
-        if (forward && x2 - x1 < a.width) {
-          const mid = round((x1 + x2) / 2);
-          return [`M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}`];
-        }
-        const drop = round(Math.max(a.bottom, b.bottom) - box.top + 16 + bus * 12);
-        bus += 1;
-        const startX = round(a.left + a.width / 2 - box.left);
-        const startY = round(a.bottom - box.top);
-        const endX = round(b.left + b.width / 2 - box.left);
-        const endY = round(b.bottom - box.top + 8);
-        return [`M ${startX} ${startY} L ${startX} ${drop} L ${endX} ${drop} L ${endX} ${endY}`];
-      });
-      setWires((prev) => (prev.length === next.length && prev.every((line, index) => line === next[index]) ? prev : next));
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(root);
-    return () => observer.disconnect();
-  }, [edgeKey, expanded, edges]);
+  const activeChart = view === "system" && systemChart ? systemChart : modulesChart;
+  const selectable = view === "system"
+    ? classes.map((item) => item.name)
+    : modules.map((item) => item.label);
+  const pickedClass = classes.find((item) => item.name === picked) ?? null;
+  const pickedModule = modules.find((item) => item.label === picked) ?? null;
+  const fileUrl = sourceUrl && pickedClass?.file && commit
+    ? `${sourceUrl.replace(/\.git$/, "")}/blob/${commit}/${pickedClass.file}`
+    : "";
+
+  async function copyMermaid() {
+    try {
+      await navigator.clipboard.writeText(activeChart);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      setCopied(false);
+    }
+  }
 
   return (
     <div className="arch-board">
-      <div className="arch-scroll">
-        <div className="arch-flow" ref={flowRef}>
-          <svg className="arch-wires" aria-hidden="true">
-            <defs>
-              <marker id="arch-arrow" viewBox="0 0 12 12" refX="9" refY="6" markerWidth="7" markerHeight="7" orient="auto">
-                <path d="M2 2 L10 6 L2 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
-              </marker>
-            </defs>
-            {wires.map((line) => (
-              <path key={line} d={line} markerEnd="url(#arch-arrow)" />
-            ))}
-          </svg>
-          {laneOrder.map((lane) => (
-            <div className="arch-lane" key={lane}>
-              <div className="arch-lane-label">{LANE_LABEL[lane]}</div>
-              <div className="arch-lane-cards">
-                {lanes[lane].map((mod) => {
-                  const isOpen = expanded === mod.id;
-                  const classes = mod.classes ?? [];
-                  const tone = moduleTone(mod.id);
-                  return (
-                    <button
-                      key={mod.id}
-                      type="button"
-                      data-mod={mod.id}
-                      className={["arch-mod", tone, isOpen ? "is-open" : ""].filter(Boolean).join(" ")}
-                      onClick={() => setExpanded(isOpen ? null : mod.id)}
-                      aria-expanded={isOpen}
-                    >
-                      <div className="arch-mod-top">
-                        {tone && <span className="arch-mod-dot" aria-hidden="true" />}
-                        <span className="arch-mod-name">{moduleName(mod.id)}</span>
-                        <span className="arch-mod-count">{mod.files}</span>
-                      </div>
-                      <span className="arch-mod-about">{MODULE_ABOUT[mod.id] ?? mod.label}</span>
-                      {isOpen && classes.length > 0 && (
-                        <ul className="arch-mod-classes" onClick={(event) => event.stopPropagation()}>
-                          {classes.map((name) => <li key={name}><code>{name}</code></li>)}
-                        </ul>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
+      <div className="diagram-toolbar">
+        <div className="method-filters" role="group" aria-label="Diagram">
+          {systemChart && (
+            <button type="button" className={view === "system" ? "is-on" : ""} onClick={() => { setView("system"); setPicked(null); }}>
+              System
+            </button>
+          )}
+          {modulesChart && (
+            <button type="button" className={view === "modules" ? "is-on" : ""} onClick={() => { setView("modules"); setPicked(null); }}>
+              Modules
+            </button>
+          )}
+        </div>
+        <div className="diagram-toolbar-actions">
+          <button type="button" className="btn-ghost" onClick={() => setZoom((value) => Math.max(0.5, Math.round((value - 0.15) * 100) / 100))} aria-label="Zoom out">−</button>
+          <button type="button" className="btn-ghost" onClick={() => setZoom(1)}>Fit</button>
+          <button type="button" className="btn-ghost" onClick={() => setZoom((value) => Math.min(2, Math.round((value + 0.15) * 100) / 100))} aria-label="Zoom in">+</button>
+          <button type="button" className="btn-ghost" onClick={() => { void copyMermaid(); }} disabled={!activeChart}>
+            {copied ? "Mermaid copied" : "Copy Mermaid"}
+          </button>
         </div>
       </div>
+
+      {activeChart ? (
+        <div className="diagram-canvas">
+          <div className="diagram-zoom" style={{ zoom }}>
+            <MermaidDiagram
+              chart={activeChart}
+              id={`${service}-${view}`}
+              selectable={selectable}
+              active={picked}
+              onPick={setPicked}
+            />
+          </div>
+        </div>
+      ) : (
+        <p className="summary">This scan has no architecture diagram yet. Map the repo again.</p>
+      )}
+
+      {pickedClass && (
+        <aside className="diagram-detail">
+          <div>
+            <strong>{pickedClass.name}</strong>
+            <span>{pickedClass.role}</span>
+          </div>
+          {pickedClass.file && <code>{pickedClass.file}</code>}
+          {pickedClass.note && <p>{pickedClass.note}</p>}
+          {fileUrl && <a href={fileUrl} target="_blank" rel="noreferrer">Open on GitHub</a>}
+          {pickedClass.members.length > 0 && (
+            <ul>
+              {pickedClass.members.slice(0, 12).map((member) => (
+                <li key={`${member.kind}-${member.name}`}><code>{member.name}</code> {member.note}</li>
+              ))}
+            </ul>
+          )}
+        </aside>
+      )}
+
+      {pickedModule && !pickedClass && (
+        <aside className="diagram-detail">
+          <div>
+            <strong>{moduleName(pickedModule.id)}</strong>
+            <span>{pickedModule.files} files</span>
+          </div>
+          <p>{MODULE_ABOUT[pickedModule.id] ?? pickedModule.label}</p>
+          {(pickedModule.classes ?? []).length > 0 && (
+            <ul>
+              {(pickedModule.classes ?? []).map((name) => <li key={name}><code>{name}</code></li>)}
+            </ul>
+          )}
+        </aside>
+      )}
 
       {erd && (
         <div className="arch-erd">
@@ -989,9 +994,10 @@ function DetailPanel({
   });
 
   const pageTitle: Record<Exclude<SectionId, "overview">, { title: string; hint: string }> = {
-    modules:  { title: "Architecture",   hint: "Entry receives requests, logic does the work, and storage holds the data. An arrow is an import. Click a module to see its classes." },
+    modules:  { title: "Architecture",   hint: "The system as a diagram. Click a box to see the classes in it. Copy Mermaid if you want the source." },
     flow:     { title: "Data flow",      hint: "Pick a route and a diagram type. Call chain shows numbered steps. Sequence shows actor messages. Transaction shows DB scope." },
     deps:     { title: "Dependencies",   hint: "Which group uses which, then the libraries in the build file." },
+    endpoints:{ title: "Endpoints",      hint: "Every HTTP route this scan found. Filter by method, path, or entity." },
     entry:    { title: "Entry points",   hint: "If you want to run this, start here." },
     critical: { title: "Critical paths", hint: "A route is listed when a finding names a class that route calls, or when that URL is marked as missing tenant scope." },
     health:   { title: "Health",         hint: "Test files, CI workflows, and the latest commit from the clone. Stars and open issues from GitHub." },
@@ -1009,15 +1015,19 @@ function DetailPanel({
           </header>
           <section className="diagram-block">
             {section === "modules" && (
-              overview?.modules?.length ? (
+              (overview?.moduleDiagram || scan.diagrams.architecture) ? (
                 <ArchBoard
-                  modules={overview.modules}
-                  edges={overview.dependencies?.internal ?? EMPTY_EDGES}
+                  modules={overview?.modules ?? []}
+                  chart={scan.diagrams.architecture}
+                  moduleChart={overview?.moduleDiagram ?? ""}
                   erd={scan.diagrams.erd}
                   service={scan.service}
+                  classes={flowClasses}
+                  sourceUrl={sourceUrl}
+                  commit={scan.commit}
                 />
               ) : (
-                <p className="summary">Map this repo again to group the code into modules.</p>
+                <p className="summary">Map this repo again to draw its architecture.</p>
               )
             )}
             {section === "flow" && (
@@ -1028,6 +1038,7 @@ function DetailPanel({
                 flowClasses={flowClasses}
               />
             )}
+            {section === "endpoints" && <EndpointBoard scan={scan} />}
             {section === "deps" && <Dependencies scan={scan} />}
             {section === "entry" && <Runbook scan={scan} />}
             {section === "critical" && (
@@ -1071,6 +1082,196 @@ function RichLine({ text }: { text: string }) {
   return <>{nodes}</>;
 }
 
+const METHOD_ORDER = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
+
+function methodRank(method: string) {
+  const index = METHOD_ORDER.indexOf(method.toUpperCase());
+  return index === -1 ? METHOD_ORDER.length : index;
+}
+
+function downloadScan(scan: ScanResult) {
+  const { previous: _previous, ...rest } = scan;
+  const blob = new Blob([JSON.stringify(rest, null, 2) + "\n"], { type: "application/json" });
+  const href = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = href;
+  link.download = `${scan.service}.json`;
+  link.click();
+  URL.revokeObjectURL(href);
+}
+
+function ScanActions({ scan }: { scan: ScanResult }) {
+  const [copied, setCopied] = useState(false);
+
+  async function copyLink() {
+    const link = `${window.location.origin}/scans/${encodeURIComponent(scan.service)}`;
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  return (
+    <div className="scan-actions">
+      <button type="button" className="btn-ghost" onClick={() => { void copyLink(); }}>
+        {copied ? "Link copied" : "Copy link"}
+      </button>
+      <button type="button" className="btn-ghost" onClick={() => downloadScan(scan)}>
+        Export JSON
+      </button>
+    </div>
+  );
+}
+
+function DiffBoard({ scan }: { scan: ScanResult }) {
+  const previous = scan.previous;
+  if (!previous) return null;
+  const diff = compareScans(scan, previous);
+  const scoreDelta = diff.scoreAfter - diff.scoreBefore;
+  const entityDelta = diff.entitiesAfter - diff.entitiesBefore;
+  return (
+    <section className="diff-card">
+      <div className="diff-head">
+        <h2 className="section-title">Since last scan</h2>
+        <p>Compared with the previous result stored for this repo.</p>
+      </div>
+      {diff.unchanged ? (
+        <p className="summary">Findings, entities, and risk score are the same.</p>
+      ) : (
+        <>
+          <div className="diff-stats">
+            <article>
+              <span>Risk</span>
+              <strong>{diff.riskBefore} → {diff.riskAfter}</strong>
+              <em>Score {diff.scoreBefore} → {diff.scoreAfter} ({scoreDelta > 0 ? `+${scoreDelta}` : scoreDelta})</em>
+            </article>
+            <article>
+              <span>Entities</span>
+              <strong>{diff.entitiesBefore} → {diff.entitiesAfter}</strong>
+              <em>{entityDelta > 0 ? `+${entityDelta}` : entityDelta}</em>
+            </article>
+            <article>
+              <span>Findings</span>
+              <strong>{diff.added.length} added</strong>
+              <em>{diff.removed.length} removed</em>
+            </article>
+          </div>
+          {diff.entitiesAdded.length > 0 && <p className="summary">New entities: {diff.entitiesAdded.join(", ")}</p>}
+          {diff.entitiesRemoved.length > 0 && <p className="summary">Removed entities: {diff.entitiesRemoved.join(", ")}</p>}
+          {diff.added.length > 0 && (
+            <div className="finding-block">
+              <h3 className="section-title">Added</h3>
+              <div className="finding-grid">
+                {diff.added.map((finding, index) => (
+                  <article className="finding-card" key={`add-${finding.kind}-${finding.file}-${finding.symbol}-${index}`}>
+                    <span className={`tag tag-${finding.kind}`}>{kindLabel(finding.kind)}</span>
+                    <strong>{finding.symbol || kindLabel(finding.kind)}</strong>
+                    <p>{finding.detail}</p>
+                    {finding.file && <span className="finding-file">{finding.file}</span>}
+                  </article>
+                ))}
+              </div>
+            </div>
+          )}
+          {diff.removed.length > 0 && (
+            <div className="finding-block">
+              <h3 className="section-title">Removed</h3>
+              <div className="finding-grid">
+                {diff.removed.map((finding, index) => (
+                  <article className="finding-card is-removed" key={`rm-${finding.kind}-${finding.file}-${finding.symbol}-${index}`}>
+                    <span className={`tag tag-${finding.kind}`}>{kindLabel(finding.kind)}</span>
+                    <strong>{finding.symbol || kindLabel(finding.kind)}</strong>
+                    <p>{finding.detail}</p>
+                    {finding.file && <span className="finding-file">{finding.file}</span>}
+                  </article>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+function EndpointBoard({ scan }: { scan: ScanResult }) {
+  const [query, setQuery] = useState("");
+  const [method, setMethod] = useState("ALL");
+
+  useEffect(() => {
+    setQuery("");
+    setMethod("ALL");
+  }, [scan.service, scan.commit]);
+
+  const methods = [...new Set(scan.endpoints.map((endpoint) => endpoint.method || ""))].sort((a, b) => methodRank(a) - methodRank(b) || a.localeCompare(b));
+  const needle = query.trim().toLowerCase();
+  const rows = scan.endpoints.filter((endpoint) => {
+    if (method !== "ALL" && endpoint.method !== method) return false;
+    if (!needle) return true;
+    const haystack = `${endpoint.method} ${endpoint.path} ${endpoint.entity ?? ""}`.toLowerCase();
+    return haystack.includes(needle);
+  });
+
+  if (scan.endpoints.length === 0) {
+    return <p className="summary">This scan did not find any HTTP endpoints.</p>;
+  }
+
+  return (
+    <div className="endpoint-board">
+      <div className="endpoint-toolbar">
+        <label className="endpoint-search">
+          <span>Filter</span>
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Path or entity"
+            aria-label="Filter endpoints"
+          />
+        </label>
+        <div className="method-filters" role="group" aria-label="HTTP method">
+          <button type="button" className={method === "ALL" ? "is-on" : ""} onClick={() => setMethod("ALL")}>All</button>
+          {methods.map((item) => (
+            <button key={item} type="button" className={method === item ? "is-on" : ""} onClick={() => setMethod(item)}>
+              {item || "—"}
+            </button>
+          ))}
+        </div>
+      </div>
+      <p className="summary">{rows.length} of {scan.endpoints.length}</p>
+      {rows.length === 0 ? (
+        <p className="summary">Nothing matches that filter.</p>
+      ) : (
+        <div className="endpoint-scroll">
+          <table className="endpoint-table">
+            <thead>
+              <tr>
+                <th>Method</th>
+                <th>Path</th>
+                <th>Entity</th>
+                <th>Scope</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((endpoint, index) => (
+                <tr key={`${endpoint.method}-${endpoint.path}-${endpoint.entity ?? ""}-${index}`}>
+                  <td><span className={`method method-${(endpoint.method || "other").toLowerCase()}`}>{endpoint.method || "—"}</span></td>
+                  <td><code>{endpoint.path}</code></td>
+                  <td>{endpoint.entity || "—"}</td>
+                  <td>{endpoint.scopeGap ? <span className="tag tag-scope_gap">Scope gap</span> : "Ok"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function OverviewBoard({
   scan,
   meta,
@@ -1090,7 +1291,8 @@ function OverviewBoard({
     || overview?.checklist.find((step) => step.title === "Tests")?.detail
     || "";
   const figures = [
-    { value: String(paths.length || scan.endpoints.length), label: paths.length ? "Routes" : "Endpoints", nav: "flow" as SectionId },
+    { value: String(paths.length), label: "Routes", nav: "flow" as SectionId },
+    { value: String(scan.endpoints.length), label: "Endpoints", nav: "endpoints" as SectionId },
     { value: String(scan.entities.length), label: "Entities", nav: "modules" as SectionId },
     { value: String(libraries), label: "Libraries", nav: "deps" as SectionId },
     { value: String(scan.counts.scopeGaps), label: "Scope gaps", nav: "critical" as SectionId },
@@ -1118,6 +1320,7 @@ function OverviewBoard({
             <h1 className="page-head-title">{scan.service}</h1>
             {why && <p className="why"><RichLine text={why} /></p>}
             {scan.summary && <p className="summary">{scan.summary}</p>}
+            <ScanActions scan={scan} />
           </div>
           <div className="risk-pill" style={{ borderColor: riskColor, color: riskColor }}>
             <span className="risk-pill-label">Risk</span>
@@ -1126,6 +1329,8 @@ function OverviewBoard({
           </div>
         </div>
       </header>
+
+      {scan.previous && <DiffBoard scan={scan} />}
 
       {/* Metric cards */}
       <div className="figures">

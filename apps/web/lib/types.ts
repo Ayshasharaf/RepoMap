@@ -95,11 +95,21 @@ export interface RepoMeta {
   pushedAt: string;
 }
 
+/** The previous scan of the same repo, kept so a rescan can be compared. */
+export interface ScanSnapshot {
+  commit: string;
+  summary: string;
+  counts: Counts;
+  entities: string[];
+  findings: Finding[];
+}
+
 export interface ScanResult {
   service: string;
   commit: string;
   source?: string;
   summary: string;
+  previous?: ScanSnapshot;
   entities: Entity[];
   relations: Relation[];
   endpoints: Endpoint[];
