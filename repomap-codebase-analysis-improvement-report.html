@@ -1,0 +1,332 @@
+
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>RepoMap – Codebase Analysis</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    background: #ffffff;
+    color: #1f2328;
+  }
+  .page { max-width: 760px; margin: 0 auto; padding: 40px 24px 64px; }
+  h1 { font-size: 26px; font-weight: 700; margin: 0 0 4px; letter-spacing: -0.03em; }
+  .subtitle { color: #57606a; font-size: 13px; margin: 0 0 36px; }
+  h2 { font-size: 16px; font-weight: 700; margin: 36px 0 12px; letter-spacing: -0.01em; border-bottom: 1px solid #e5e7eb; padding-bottom: 8px; }
+  h3 { font-size: 13px; font-weight: 700; margin: 18px 0 6px; color: #1f2328; text-transform: uppercase; letter-spacing: 0.04em; }
+  p { margin: 0 0 10px; color: #1f2328; }
+  ul { margin: 0 0 10px; padding-left: 20px; }
+  li { margin-bottom: 5px; }
+  code { font-family: "SF Mono", ui-monospace, monospace; font-size: 12px; background: #f7f8fa; border: 1px solid #e5e7eb; border-radius: 4px; padding: 1px 5px; }
+
+  .badge {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    border-radius: 4px;
+    padding: 2px 7px;
+    margin-right: 6px;
+    vertical-align: middle;
+    letter-spacing: 0.02em;
+  }
+  .badge-high   { background: #fde8ec; color: #b4233a; }
+  .badge-medium { background: #fff7e0; color: #8a5a00; }
+  .badge-low    { background: #e7f6ee; color: #0f6a3a; }
+  .badge-ux     { background: #e8edff; color: #173ded; }
+  .badge-feature { background: #f3eaff; color: #5a29a3; }
+  .badge-dx     { background: #f0f6ff; color: #1a5fb4; }
+
+  .item {
+    background: #f7f8fa;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 10px;
+  }
+  .item-title { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
+  .item-body { color: #57606a; font-size: 13px; margin: 0; }
+  .item-file { font-size: 11px; color: #8c909a; margin-top: 6px; }
+
+  .layer-intro { color: #57606a; font-size: 13px; margin-bottom: 14px; }
+
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 10px; }
+  @media (max-width: 560px) { .two-col { grid-template-columns: 1fr; } }
+
+  .stat-card {
+    background: #f7f8fa;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .stat-num { font-size: 28px; font-weight: 700; letter-spacing: -0.04em; color: #1f2328; }
+  .stat-label { font-size: 12px; color: #57606a; margin-top: 2px; }
+
+  .summary-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 14px; }
+  .summary-table th { text-align: left; font-weight: 600; border-bottom: 2px solid #e5e7eb; padding: 6px 8px; background: #f7f8fa; }
+  .summary-table td { padding: 8px 8px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
+  .summary-table tr:last-child td { border-bottom: none; }
+
+  .divider { border: none; border-top: 1px solid #e5e7eb; margin: 32px 0; }
+
+  footer { text-align: center; font-size: 12px; color: #8c909a; margin-top: 48px; padding-top: 20px; border-top: 1px solid #e5e7eb; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <h1>RepoMap – Codebase Analysis</h1>
+  <p class="subtitle">Full review of scanner, API, frontend, and developer experience · June 2025</p>
+
+  
+  <div class="two-col">
+    <div class="stat-card">
+      <div class="stat-num">7</div>
+      <div class="stat-label">Source files reviewed (scanner)</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num">6</div>
+      <div class="stat-label">Source files reviewed (web)</div>
+    </div>
+  </div>
+  <div class="two-col">
+    <div class="stat-card">
+      <div class="stat-num">Java only</div>
+      <div class="stat-label">Language support — Spring Boot only, hard limit enforced in <code>contract.md</code></div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num">0</div>
+      <div class="stat-label">Tests in the whole project (web + scanner)</div>
+    </div>
+  </div>
+
+  
+  <h2>What the product is</h2>
+  <p>RepoMap takes a public GitHub URL, shallow-clones the repo, runs static analysis on every Java file (javalang AST), and returns a single deterministic JSON that the Next.js frontend turns into 7 views: Overview, Architecture, Data flow, Dependencies, Entry points, Critical paths, and Health. The backend is a FastAPI streaming server; the frontend is a React/Next.js app with Mermaid diagrams. No database, no auth, no persistence — scans live in a <code>scans/</code> folder on disk.</p>
+
+  <hr class="divider" />
+
+  
+  <h2>Genuine strengths to protect</h2>
+  <ul>
+    <li><strong>Deterministic output.</strong> <code>json.dumps(sort_keys=True)</code> + no timestamps means the same repo always produces the same bytes. This is rare and valuable.</li>
+    <li><strong>Embedded metadata in Mermaid strings.</strong> The <code>%% flow\t</code> / <code>%% path\t</code> / <code>%% diagram\t</code> comment protocol is an elegant way to ship structured data inside a diagram string without a separate API field.</li>
+    <li><strong>Streaming progress.</strong> The NDJSON stream in <code>scan-github/stream</code> with a fallback to the blocking endpoint is solid defensive design.</li>
+    <li><strong>Zero-dependency frontend data model.</strong> <code>lib/types.ts</code> is clean and matches the contract exactly.</li>
+    <li><strong>Clean CSS architecture.</strong> Design tokens in <code>:root</code>, semantic class names, no inline styles in JSX. Easy to retheme.</li>
+  </ul>
+
+  <hr class="divider" />
+
+  
+  <h2>Critical issues</h2>
+  <p class="layer-intro">Things that will break the product for real users today.</p>
+
+  <div class="item">
+    <div class="item-title"><span class="badge badge-high">High</span> Scans are lost on every server restart</div>
+    <p class="item-body">The backend never writes scan results to disk. <code>readScans()</code> reads from <code>../../scans/</code> but <code>main.py</code> only returns the result in the HTTP response. If the user refreshes the page, all their scans are gone. The data needs to be persisted — either to <code>scans/</code> from the Python side, or to <code>localStorage</code> in the browser.</p>
+    <div class="item-file">scanner/main.py · apps/web/lib/readScans.ts</div>
+  </div>
+
+  <div class="item">
+    <div class="item-title"><span class="badge badge-high">High</span> No README — new users have no idea how to start</div>
+    <p class="item-body">There is no README.md at the repo root. The contract is in <code>contract.md</code> (aimed at the scanner), but nothing tells a new contributor how to run the scanner, start the web app, or what the <code>SCANNER_URL</code> env var must be set to. This is the single biggest barrier to onboarding.</p>
+    <div class="item-file">/ (root — missing README.md)</div>
+  </div>
+
+  <div class="item">
+    <div class="item-title"><span class="badge badge-high">High</span> Scanner URL is hardcoded to localhost — deployment is silent-fail</div>
+    <p class="item-body"><code>const BACKEND = process.env.SCANNER_URL ?? "http://localhost:8000"</code> — there is no validation or startup warning when this env var is missing. In a deployed environment the frontend silently points at nothing and returns a 502 to the user with no hint about configuration.</p>
+    <div class="item-file">apps/web/app/scan-github/route.ts · line 5</div>
+  </div>
+
+  <div class="item">
+    <div class="item-title"><span class="badge badge-high">High</span> Streaming progress events are consumed but never shown</div>
+    <p class="item-body"><code>readScanStream()</code> in Dashboard.tsx collects all NDJSON events, but the <code>status</code> progress events (phase: "clone", "scan", "overview") are discarded — the user just sees "Mapping…" with a spinner. For repos that take 30–60 seconds, this looks like the app is hanging.</p>
+    <div class="item-file">apps/web/components/Dashboard.tsx · lines 9–24</div>
+  </div>
+
+  <hr class="divider" />
+
+  
+  <h2>Important improvements</h2>
+
+  <div class="item">
+    <div class="item-title"><span class="badge badge-medium">Medium</span> Only Spring Boot Java is supported — this is completely invisible</div>
+    <p class="item-body">Any non-Java or non-Spring repo returns "Unscored" with a single generic finding, but the landing page says "Map a public GitHub repository" with no caveat. Users pasting Python, Node, or Go repos will be confused by a blank result. The constraint should be front-and-centre on the landing page.</p>
+    <div class="item-file">apps/web/components/Dashboard.tsx · line 142</div>
+  </div>
+
+  <div class="item">
+    <div class="item-title"><span class="badge badge-medium">Medium</span> No way to delete or refresh a scan</div>
+    <p class="item-body">Once a scan is in the sidebar there is no delete or re-scan button. Re-pasting the same URL replaces it in state, but that is not obvious. Stale scans accumulate in the sidebar with no way to manage them.</p>
+    <div class="item-file">apps/web/components/Dashboard.tsx · sidebar-repos section</div>
+  </div>
+
+  <div class="item">
+    <div class="item-title"><span class="badge badge-medium">Medium</span> <code>javalang</code> parse errors are silently swallowed everywhere</div>
+    <p class="item-body">Six separate <code>except Exception: continue</code> blocks in <code>scan.py</code> and <code>overview.py</code> mean a malformed Java file is silently skipped with no indication in the output. A file that fails parsing should appear in the findings list so the user knows the scan is incomplete.</p>
+    <div class="item-file">scanner/scan.py · scanner/overview.py</div>
+  </div>
+
+  <div class="item">
+    <div class="item-title"><span class="badge badge-medium">Medium</span> The "Health" churn field is always the same static string</div>
+    <p class="item-body">"Only the latest commit is cloned, so the files that change most often are not in this scan." is hardcoded in <code>overview.py</code>. This is honest but wastes a signal card on noise. It should be removed or replaced with something actionable (e.g. git log line count from the shallow clone).</p>
+    <div class="item-file">scanner/overview.py · line 84</div>
+  </div>
+
+  <div class="item">
+    <div class="item-title"><span class="badge badge-medium">Medium</span> GitHub API called without a token — rate-limited to 60 req/hr</div>
+    <p class="item-body"><code>repo-meta/route.ts</code> calls the GitHub REST API with no <code>Authorization</code> header. Unauthenticated requests are capped at 60/hour per IP. In a shared deployment this will fail silently for any moderate traffic. Add a <code>GITHUB_TOKEN</code> env var (optional, graceful degradation).</p>
+    <div class="item-file">apps/web/app/repo-meta/route.ts · lines 12–13</div>
+  </div>
+
+  <div class="item">
+    <div class="item-title"><span class="badge badge-medium">Medium</span> 500-file hard limit is too low for real Spring Boot monorepos</div>
+    <p class="item-body">The contract caps analysis at 500 Java files, returning "Unscored" above that. Many production Spring Boot services have 200–800 files. The limit should be raised or made configurable, with per-module sub-scanning for large codebases.</p>
+    <div class="item-file">contract.md · scanner/scan.py · _unscored()</div>
+  </div>
+
+  <hr class="divider" />
+
+  
+  <h2>User experience improvements</h2>
+
+  <div class="item">
+    <div class="item-title"><span class="badge badge-ux">UX</span> Real-time scan progress phases should be displayed</div>
+    <p class="item-body">The NDJSON stream emits <code>{"type":"status","phase":"clone"}</code>, <code>"scan"</code>, <code>"commit"</code>, <code>"overview"</code> events. Show these as a progress stepper ("Cloning… → Scanning files… → Building overview…"). This removes the perceived hang on large repos.</p>
+    <div class="item-file">apps/web/components/Dashboard.tsx · readScanStream()</div>
+  </div>
+
+  <div class="item">
+    <div class="item-title"><span class="badge badge-ux">UX</span> The landing page has no example repos to try</div>
+    <p class="item-body">A new user faces a blank text field with no idea what to paste. Three or four pre-filled example buttons (well-known Spring Boot repos like <code>spring-petclinic</code> or <code>spring-boot-realworld-example</code>) would dramatically reduce the first-scan friction.</p>
+    <div class="item-file">apps/web/components/Dashboard.tsx · plaque section</div>
+  </div>
+
+  <div class="item">
+    <div class="item-title"><span class="badge badge-ux">UX</span> Scan timestamp is missing — user cannot tell how fresh a cached result is</div>
+    <p class="item-body">The commit SHA is shown but not when the scan was run. A relative timestamp ("scanned 2 hours ago") in the sidebar or overview would let users know if they need to re-scan after a push.</p>
+    <div class="item-file">apps/web/components/Dashboard.tsx · sidebar-repos / OverviewBoard</div>
+  </div>
+
+  <div class="item">
+    <div class="item-title"><span class="badge badge-ux">UX</span> Route selector in Data flow overflows on repos with many endpoints</div>
+    <p class="item-body">The route selector is a horizontal tab strip (<code>chart-switch</code>) with no virtualisation or truncation. A repo with 40+ routes produces an unusably wide row. A searchable dropdown or paginated list would scale better.</p>
+    <div class="item-file">apps/web/components/Dashboard.tsx · FlowSection route selector</div>
+  </div>
+
+  <div class="item">
+    <div class="item-title"><span class="badge badge-ux">UX</span> No keyboard navigation between sections</div>
+    <p class="item-body">The sidebar nav items are buttons with <code>aria-current</code>, but there are no keyboard shortcuts (e.g. <code>1</code>–<code>7</code> to jump to each section) and no <code>tabindex</code> management when the mobile sidebar closes. Keyboard and screen-reader users have a degraded experience.</p>
+    <div class="item-file">apps/web/components/Dashboard.tsx · sidebar-nav</div>
+  </div>
+
+  <hr class="divider" />
+
+  
+  <h2>Missing features that would make this genuinely useful</h2>
+
+  <div class="item">
+    <div class="item-title"><span class="badge badge-feature">Feature</span> Diff / compare two scans of the same repo</div>
+    <p class="item-body">The most valuable onboarding use-case is "what changed since last sprint?" Show a diff of findings, entity count, and risk score between two scan results of the same service. The deterministic output makes this trivially computable.</p>
+  </div>
+
+  <div class="item">
+    <div class="item-title"><span class="badge badge-feature">Feature</span> Shareable permalink / export</div>
+    <p class="item-body">There is no way to share a scan result with a colleague. A "Copy link" or "Export JSON" button, or a simple <code>/scans/[service]</code> route that serves the stored scan, would make the tool team-ready. Currently the result exists only in the current browser session.</p>
+  </div>
+
+  <div class="item">
+    <div class="item-title"><span class="badge badge-feature">Feature</span> Kotlin support</div>
+    <p class="item-body">A large fraction of Spring Boot codebases are now Kotlin. <code>javalang</code> cannot parse <code>.kt</code> files. Adding tree-sitter or a Kotlin-specific parser for the same analysis (entities, controllers, repositories) would massively expand the addressable set of repos.</p>
+    <div class="item-file">scanner/scan.py · _collect_java_files()</div>
+  </div>
+
+  <div class="item">
+    <div class="item-title"><span class="badge badge-feature">Feature</span> Multi-module / multi-service support</div>
+    <p class="item-body">Maven multi-module projects (common in microservice monorepos) are scanned as a flat list of Java files. A module-aware scan that maps each Maven module to its own service entry, with cross-module dependency arrows, would be far more accurate for real enterprise repos.</p>
+  </div>
+
+  <div class="item">
+    <div class="item-title"><span class="badge badge-feature">Feature</span> Private repo support via GitHub token</div>
+    <p class="item-body">The scanner only accepts public repos. Adding an optional per-scan GitHub PAT (passed as a header or URL param, never logged) would open the tool to teams who want to analyse their own private codebases.</p>
+    <div class="item-file">scanner/main.py · _clone_and_scan()</div>
+  </div>
+
+  <div class="item">
+    <div class="item-title"><span class="badge badge-feature">Feature</span> OpenAPI / REST endpoint table</div>
+    <p class="item-body">The scanner extracts <code>endpoints[]</code> with method, path, and entity. The UI does not show a standalone API table. A filterable endpoint browser (like a lightweight Swagger view) would be useful for new team members who need to find a route quickly.</p>
+    <div class="item-file">apps/web/components/Dashboard.tsx · no endpoint table currently rendered</div>
+  </div>
+
+  <hr class="divider" />
+
+  
+  <h2>Developer experience &amp; onboarding</h2>
+
+  <div class="item">
+    <div class="item-title"><span class="badge badge-dx">DX</span> No README — no setup instructions anywhere</div>
+    <p class="item-body">A new contributor cloning this repo has to read four Python files and three TypeScript files to understand how to run anything. A root <code>README.md</code> with a 5-step quickstart (install Python deps, <code>uvicorn main:app</code>, set <code>SCANNER_URL</code>, <code>npm run dev</code>, paste a URL) is the single highest-leverage improvement.</p>
+  </div>
+
+  <div class="item">
+    <div class="item-title"><span class="badge badge-dx">DX</span> No <code>.env.example</code> for the web app</div>
+    <p class="item-body">The only env var (<code>SCANNER_URL</code>) is referenced in code but never documented. Add a <code>apps/web/.env.example</code> with <code>SCANNER_URL=http://localhost:8000</code> so the required variable is self-documenting.</p>
+    <div class="item-file">apps/web/ — missing .env.example</div>
+  </div>
+
+  <div class="item">
+    <div class="item-title"><span class="badge badge-dx">DX</span> No tests anywhere in the project</div>
+    <p class="item-body">The scanner has zero unit tests. Given that <code>scan.py</code> alone is ~1 400 lines of complex AST walking logic, a single wrong assumption about <code>javalang</code> node shapes can produce silent wrong output. At minimum: snapshot tests for the 5 finding types and the Mermaid comment format.</p>
+    <div class="item-file">scanner/ · apps/web/</div>
+  </div>
+
+  <div class="item">
+    <div class="item-title"><span class="badge badge-dx">DX</span> No <code>docker-compose.yml</code> — local setup requires manual coordination</div>
+    <p class="item-body">Running the product locally requires two separate terminal windows (Python uvicorn + Next.js dev), knowing the right ports, and manually setting env vars. A single <code>docker-compose.yml</code> at the root (or a <code>Makefile</code> with a <code>make dev</code> target) would reduce the setup to one command.</p>
+  </div>
+
+  <div class="item">
+    <div class="item-title"><span class="badge badge-dx">DX</span> <code>contract.md</code> is an internal spec, not user-facing documentation</div>
+    <p class="item-body"><code>contract.md</code> documents the JSON schema for the scanner developer, but reads like a constraint list, not a guide. Move it to <code>docs/scanner-contract.md</code> and add a <code>docs/architecture.md</code> that explains the data flow: GitHub → clone → scan.py → overview.py → NDJSON → Next.js → 7 views.</p>
+    <div class="item-file">contract.md</div>
+  </div>
+
+  <hr class="divider" />
+
+  
+  <h2>Prioritised action list</h2>
+  <table class="summary-table">
+    <thead>
+      <tr>
+        <th>Priority</th>
+        <th>Action</th>
+        <th>Effort</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td><span class="badge badge-high">1</span></td><td>Write a root README with quickstart steps</td><td>1–2 hrs</td></tr>
+      <tr><td><span class="badge badge-high">2</span></td><td>Persist scan results to <code>scans/</code> from the Python backend</td><td>~30 min</td></tr>
+      <tr><td><span class="badge badge-high">3</span></td><td>Show streaming progress phases in the UI during scan</td><td>2–3 hrs</td></tr>
+      <tr><td><span class="badge badge-high">4</span></td><td>State clearly on the landing page: "Spring Boot Java only"</td><td>15 min</td></tr>
+      <tr><td><span class="badge badge-medium">5</span></td><td>Add example repo buttons on the landing page</td><td>30 min</td></tr>
+      <tr><td><span class="badge badge-medium">6</span></td><td>Add <code>GITHUB_TOKEN</code> support in repo-meta route</td><td>30 min</td></tr>
+      <tr><td><span class="badge badge-medium">7</span></td><td>Add delete/re-scan buttons per repo in sidebar</td><td>1–2 hrs</td></tr>
+      <tr><td><span class="badge badge-medium">8</span></td><td>Add <code>.env.example</code> and <code>docker-compose.yml</code></td><td>1 hr</td></tr>
+      <tr><td><span class="badge badge-medium">9</span></td><td>Add scanner unit tests for the 5 finding types</td><td>1 day</td></tr>
+      <tr><td><span class="badge badge-feature">10</span></td><td>Add a shareable permalink / JSON export</td><td>2–4 hrs</td></tr>
+      <tr><td><span class="badge badge-feature">11</span></td><td>Add a REST endpoint table view</td><td>3–4 hrs</td></tr>
+      <tr><td><span class="badge badge-feature">12</span></td><td>Add Kotlin (.kt) file support via tree-sitter</td><td>3–5 days</td></tr>
+      <tr><td><span class="badge badge-feature">13</span></td><td>Scan diff / compare two results of the same repo</td><td>2–3 days</td></tr>
+    </tbody>
+  </table>
+
+  <footer>Made with IBM Bob</footer>
+</div>
+</body>
+</html>

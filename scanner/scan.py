@@ -1305,27 +1305,58 @@ def _make_diagrams(entities: dict, relations: list[dict], endpoints: list[dict],
 # Main scan function
 # ---------------------------------------------------------------------------
 
-def scan_directory(root: str, commit: str = "local") -> dict:
+class _FileWatch:
+    """List of Java files that reports the one currently being read."""
+
+    def __init__(self, files: list[Path], root: str, progress, phase: str):
+        self.files = files
+        self.root = root
+        self.progress = progress
+        self.phase = phase
+
+    def __iter__(self):
+        total = len(self.files)
+        for index, path in enumerate(self.files, 1):
+            if self.progress:
+                self.progress({
+                    "type": "file",
+                    "phase": self.phase,
+                    "file": _relative(path, self.root),
+                    "index": index,
+                    "total": total,
+                })
+            yield path
+
+    def __len__(self):
+        return len(self.files)
+
+
+def scan_directory(root: str, commit: str = "local", progress=None) -> dict:
     root = os.path.abspath(root)
     java_files = _collect_java_files(root)
 
     if not java_files:
         return _unscored(root, commit, "No Java files found")
 
-    entity_map = _scan_entities(java_files, root)
+    watch = _FileWatch(java_files, root, progress, "classes")
+    entity_map = _scan_entities(watch, root)
 
     if len(java_files) > 500:
         return _unscored(root, commit, f"Too many Java files ({len(java_files)} > 500)")
 
-    flow, classes = _scan_flow(java_files, entity_map, root)
+    watch.phase = "routes"
+    flow, classes = _scan_flow(watch, entity_map, root)
     if not entity_map:
         result = _unscored(root, commit, "No @Entity classes found")
         result["diagrams"] = _make_diagrams({}, [], [], flow, classes)
         return result
 
-    relations = _scan_relations(java_files, root, entity_map)
-    findings, repo_method_scope_gaps = _scan_findings(java_files, root, entity_map, relations)
-    endpoints = _scan_endpoints(java_files, root, entity_map, repo_method_scope_gaps)
+    watch.phase = "links"
+    relations = _scan_relations(watch, root, entity_map)
+    watch.phase = "findings"
+    findings, repo_method_scope_gaps = _scan_findings(watch, root, entity_map, relations)
+    watch.phase = "urls"
+    endpoints = _scan_endpoints(watch, root, entity_map, repo_method_scope_gaps)
 
     scope_gaps = sum(1 for f in findings if f["kind"] == "scope_gap")
     n_plus_one = sum(1 for f in findings if f["kind"] == "n_plus_one")

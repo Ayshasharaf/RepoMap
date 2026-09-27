@@ -1,23 +1,29 @@
 """
 main.py  –  FastAPI server.
 
-POST /scan-github  {"url": "https://github.com/owner/repo"}
-Returns the scan JSON defined by CONTRACT.md.
+POST /scan-github         {"url": "https://github.com/owner/repo"}
+POST /scan-github/stream  same body, newline-delimited progress, then the scan JSON.
 """
 
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from overview import build_overview
 from scan import scan_directory
+
+# Resolved once at startup: two levels up from scanner/ is the repo root.
+_SCANS_DIR = Path(__file__).resolve().parent.parent / "scans"
 
 app = FastAPI()
 
@@ -30,20 +36,18 @@ class ScanRequest(BaseModel):
     url: str
 
 
-@app.post("/scan-github")
-def scan_github(req: ScanRequest):
-    url = req.url.strip()
-
-    # Validate host – never fetch anything other than github.com
+def _prepare(url: str) -> tuple[str, str, str]:
+    url = url.strip()
     if not url.startswith("https://github.com/"):
         raise HTTPException(status_code=400, detail="Only public https://github.com URLs are accepted")
-
-    m = _GITHUB_RE.match(url)
-    if not m:
+    match = _GITHUB_RE.match(url)
+    if not match:
         raise HTTPException(status_code=400, detail="Invalid GitHub URL format")
+    slug = match.group(1)
+    return f"https://github.com/{slug}.git", slug.split("/")[-1], slug
 
-    clean_url = f"https://github.com/{m.group(1)}.git"
 
+def _clone_and_scan(clean_url: str, repo_slug: str, progress=None) -> dict:
     tmp_dir = tempfile.mkdtemp()
     try:
         try:
@@ -59,7 +63,9 @@ def scan_github(req: ScanRequest):
         except subprocess.CalledProcessError as exc:
             raise HTTPException(status_code=422, detail=f"Clone failed: {exc.stderr.strip()}")
 
-        # Resolve commit SHA
+        if progress:
+            progress({"type": "status", "phase": "commit", "file": "", "index": 0, "total": 0})
+
         try:
             result = subprocess.run(
                 ["git", "rev-parse", "HEAD"],
@@ -72,14 +78,74 @@ def scan_github(req: ScanRequest):
         except Exception:
             commit = "local"
 
-        data = scan_directory(tmp_dir, commit)
+        data = scan_directory(tmp_dir, commit, progress=progress)
+        if progress:
+            progress({"type": "status", "phase": "overview", "file": "", "index": 0, "total": 0})
         data["overview"] = build_overview(tmp_dir, data)
-
-        # Override service name with repo slug (not a temp path basename)
-        repo_slug = m.group(1).split("/")[-1]
         data["service"] = repo_slug
-
+        return data
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
+
+def _persist(data: dict) -> None:
+    """Write the scan result to scans/<service>.json so the Next.js app can read it on reload."""
+    try:
+        _SCANS_DIR.mkdir(parents=True, exist_ok=True)
+        # Use a safe filename: replace any path separators so e.g. "owner/repo" → "owner_repo"
+        safe_name = data["service"].replace("/", "_").replace("\\", "_")
+        dest = _SCANS_DIR / f"{safe_name}.json"
+        payload = json.dumps(data, sort_keys=True, indent=2, ensure_ascii=False) + "\n"
+        dest.write_text(payload, encoding="utf-8")
+    except Exception as exc:
+        # Persistence failure must never kill the HTTP response.
+        print(f"[repomap] warn: could not persist scan: {exc}")
+
+
+@app.post("/scan-github")
+def scan_github(req: ScanRequest):
+    clean_url, repo_slug, _repo = _prepare(req.url)
+    data = _clone_and_scan(clean_url, repo_slug)
+    _persist(data)
     return json.loads(json.dumps(data, sort_keys=True, indent=2))
+
+
+@app.post("/scan-github/stream")
+def scan_github_stream(req: ScanRequest):
+    clean_url, repo_slug, repo = _prepare(req.url)
+
+    def generate():
+        events: queue.Queue = queue.Queue()
+
+        def progress(event: dict):
+            event.setdefault("repo", repo)
+            events.put(event)
+
+        def work():
+            try:
+                progress({"type": "status", "phase": "clone", "file": "", "index": 0, "total": 0})
+                try:
+                    data = _clone_and_scan(clean_url, repo_slug, progress=progress)
+                except HTTPException as exc:
+                    detail = exc.detail if isinstance(exc.detail, str) else "Scan failed"
+                    events.put({"type": "error", "detail": detail})
+                    return
+                _persist(data)
+                events.put({"type": "result", "data": data})
+            except Exception as exc:
+                events.put({"type": "error", "detail": str(exc)})
+            finally:
+                events.put(None)
+
+        threading.Thread(target=work, daemon=True).start()
+        while True:
+            item = events.get()
+            if item is None:
+                break
+            yield json.dumps(item, ensure_ascii=False) + "\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

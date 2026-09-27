@@ -42,12 +42,33 @@ export default function MermaidDiagram({ chart, id, selectable, active, onPick }
         securityLevel: "loose",
         fontFamily: "Inter, system-ui, sans-serif",
         themeVariables: {
-          fontSize: "15px",
+          fontSize: "14px",
           lineColor: "#5c5f6b",
           textColor: "#0a0b14",
-          primaryColor: "#edf1ff",
-          primaryBorderColor: "#173ded",
+          primaryColor: "#ffffff",
+          primaryBorderColor: "#e4e5ea",
           primaryTextColor: "#0a0b14",
+          secondaryColor: "#f5f5f7",
+          tertiaryColor: "#f5f5f7",
+          background: "#ffffff",
+          mainBkg: "#ffffff",
+          nodeBorder: "#e4e5ea",
+          clusterBkg: "#f5f5f7",
+          titleColor: "#0a0b14",
+          actorBkg: "#ffffff",
+          actorBorder: "#173ded",
+          actorTextColor: "#0a0b14",
+          signalColor: "#0a0b14",
+          signalTextColor: "#0a0b14",
+          labelBoxBkgColor: "#ffffff",
+          labelBoxBorderColor: "#e4e5ea",
+          loopTextColor: "#0a0b14",
+          noteBkgColor: "#f5f5f7",
+          noteTextColor: "#0a0b14",
+          noteBorderColor: "#e4e5ea",
+          activationBkgColor: "#e8edff",
+          activationBorderColor: "#173ded",
+          sequenceNumberColor: "#ffffff",
         },
         sequence: { useMaxWidth: false, diagramMarginX: 12, diagramMarginY: 12 },
         flowchart: {
@@ -76,11 +97,13 @@ export default function MermaidDiagram({ chart, id, selectable, active, onPick }
           const svgEl = ref.current.querySelector("svg");
           if (!svgEl) return;
           const box = svgEl.viewBox?.baseVal;
-          svgEl.style.maxWidth = "none";
           svgEl.style.display = "block";
+          svgEl.style.height = "auto";
           if (box && box.width > 0 && box.height > 0) {
-            svgEl.style.width = `${Math.ceil(box.width)}px`;
-            svgEl.style.height = `${Math.ceil(box.height)}px`;
+            svgEl.removeAttribute("width");
+            svgEl.removeAttribute("height");
+            svgEl.style.width = "100%";
+            svgEl.style.maxWidth = `${Math.ceil(box.width)}px`;
           }
           if (!names.length) return;
           svgEl.querySelectorAll("g.node").forEach((node) => {
