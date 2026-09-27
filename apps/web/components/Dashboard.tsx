@@ -62,14 +62,46 @@ const NAV: { id: SectionId; label: string; hint: string; icon: string }[] = [
 ];
 
 const PREVIEWS = [
-  { label: "Overview",       hint: "What this repo is, before any diagram.",                                  sketch: "cover" },
-  { label: "Architecture",   hint: "Modules by responsibility, and how they import each other.",              sketch: "rooms" },
-  { label: "Data flow",      hint: "Each route as a line of stops, from the request to storage.",             sketch: "rail" },
-  { label: "Endpoints",      hint: "A filterable list of every HTTP route.",                                 sketch: "table" },
-  { label: "Dependencies",   hint: "Libraries on shelves, named by what they are for.",                      sketch: "shelves" },
-  { label: "Entry points",   hint: "Run commands and process starts from the build files and README.",       sketch: "term" },
-  { label: "Key paths",      hint: "Routes that reach a database or external system.",                       sketch: "risk" },
-  { label: "Health",         hint: "Tests, CI, stars, and how big the latest commit is.",                    sketch: "signals" },
+  {
+    label: "Overview",
+    hint: "Language, stack, modules, and a short brief of what the repo does.",
+    sketch: "cover" as const,
+  },
+  {
+    label: "Architecture",
+    hint: "Clickable system and module graphs, plus an ERD when entities exist.",
+    sketch: "rooms" as const,
+  },
+  {
+    label: "Data flow",
+    hint: "Pick a route, then walk call chain, sequence, or transaction.",
+    sketch: "rail" as const,
+  },
+  {
+    label: "Endpoints",
+    hint: "Every HTTP route found — filter by method, path, or entity.",
+    sketch: "table" as const,
+  },
+  {
+    label: "Dependencies",
+    hint: "Build-file libraries grouped by purpose: DB, auth, HTTP, more.",
+    sketch: "shelves" as const,
+  },
+  {
+    label: "Entry points",
+    hint: "Run command, process starts, Docker/CLI, and env vars.",
+    sketch: "term" as const,
+  },
+  {
+    label: "Key paths",
+    hint: "Only request paths that reach a database or external system.",
+    sketch: "risk" as const,
+  },
+  {
+    label: "Health",
+    hint: "Tests, CI, coverage config, and live GitHub stars and issues.",
+    sketch: "signals" as const,
+  },
 ] as const;
 
 const MODULE_LABEL: Record<string, string> = {
@@ -220,17 +252,17 @@ export default function Dashboard({ initialScans }: { initialScans: ScanResult[]
 
   if (!selected) {
     return (
-      <div>
+      <div className="landing">
         <section className="plaque">
           <div className="plaque-inner">
-            <div className="kicker">Paste a repo</div>
-            <h1>See how it is built.</h1>
+            <div className="plaque-brand">
+              <span className="brand-mark" aria-hidden="true">RM</span>
+              <span className="plaque-brand-name">RepoMap</span>
+            </div>
+            <h1>See how a repo is built.</h1>
             <p>
-              Map any public GitHub repository. Architecture, data flow, endpoints, dependencies, and entry points — with deeper Spring Boot structure when the repo is Java.
-            </p>
-            <p className="lang-note">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{display:"inline",verticalAlign:"-2px",marginRight:"5px"}}><circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/></svg>
-              Architecture maps any public repo when an AI key is set. Spring Boot Java repos also get entity and endpoint detail.
+              Paste a public GitHub URL. RepoMap maps architecture, data flow, endpoints,
+              dependencies, and entry points — with deeper entity and route detail for Spring Boot.
             </p>
             <form className="scan-form" onSubmit={handleScan}>
               <input
@@ -251,43 +283,129 @@ export default function Dashboard({ initialScans }: { initialScans: ScanResult[]
                 ) : "Map it"}
               </button>
             </form>
-            <div className="example-repos" role="group" aria-label="Example repositories">
-              <span className="example-repos-label">Try one</span>
-              {EXAMPLE_REPOS.map((example) => (
-                <button
-                  key={example.url}
-                  type="button"
-                  className="example-repo"
-                  disabled={loading}
-                  onClick={() => setUrl(example.url)}
-                  title={example.url}
-                >
-                  <strong>{example.label}</strong>
-                  <span>{example.hint}</span>
-                </button>
-              ))}
-            </div>
+            <p className="lang-note">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{display:"inline",verticalAlign:"-2px",marginRight:"5px"}}><circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/></svg>
+              Architecture works for any public repo when an AI key is set. Spring Boot Java also fills entities, ERD, and endpoints.
+            </p>
             {error && <div className="error">{error}</div>}
           </div>
         </section>
         <section className="previews">
-          <p className="section-kicker">After you map it</p>
-          <h2>Eight readings of the same repo.</h2>
-          <div className="preview-grid">
-            {PREVIEWS.map((item) => (
-              <article className="preview" key={item.label}>
-                <div className={`sketch sketch-${item.sketch}`} aria-hidden="true">
-                  {item.sketch === "cover" && <><i /><i /><i /><i /></>}
-                  {item.sketch === "rooms" && <><b>API</b><b>Services</b><b>Data</b></>}
-                  {item.sketch === "rail" && <><span /><span /><span /></>}
-                  {item.sketch === "table" && <><span /><span /><span /></>}
-                  {item.sketch === "shelves" && <><em>Database</em><em>Queue</em><em>Auth</em></>}
-                  {item.sketch === "term" && <code>./mvnw spring-boot:run</code>}
-                  {item.sketch === "risk" && <><span /><span className="is-hot" /><span /></>}
-                  {item.sketch === "signals" && <><s /><s className="is-off" /><s /></>}
+          <p className="section-kicker">What you get</p>
+          <h2>Eight views of the same codebase.</h2>
+          <p className="previews-lede">
+            Each view answers a different question — from “what is this?” to “how do I run it?”
+          </p>
+          <div className="preview-rail" role="list">
+            {PREVIEWS.map((item, index) => (
+              <article className="preview-card" key={item.label} role="listitem">
+                <div className={`preview-stage sketch sketch-${item.sketch}`} aria-hidden="true">
+                  {item.sketch === "cover" && (
+                    <>
+                      <div className="mock-cover-head">
+                        <i className="mock-dot" />
+                        <i className="mock-dot" />
+                        <i className="mock-dot" />
+                        <em>identity</em>
+                      </div>
+                      <div className="mock-cover-grid">
+                        <b>Stack</b>
+                        <b>Modules</b>
+                        <b>Brief</b>
+                      </div>
+                    </>
+                  )}
+                  {item.sketch === "rooms" && (
+                    <>
+                      <div className="mock-arch-nodes">
+                        <b>API</b>
+                        <b>Services</b>
+                        <b>Data</b>
+                      </div>
+                      <div className="mock-arch-links" />
+                      <div className="mock-erd-strip">
+                        <em>Entity</em>
+                        <em>Entity</em>
+                        <em>Entity</em>
+                      </div>
+                    </>
+                  )}
+                  {item.sketch === "rail" && (
+                    <>
+                      <div className="mock-route-chip">GET /orders</div>
+                      <div className="mock-flow-steps">
+                        <span>Ctrl</span>
+                        <i />
+                        <span>Svc</span>
+                        <i />
+                        <span>Repo</span>
+                      </div>
+                    </>
+                  )}
+                  {item.sketch === "table" && (
+                    <>
+                      <div className="mock-ep-filters">
+                        <em>GET</em>
+                        <em>POST</em>
+                        <em>All</em>
+                      </div>
+                      <div className="mock-ep-rows">
+                        <span><b>GET</b> /api/pets</span>
+                        <span><b>POST</b> /api/owners</span>
+                        <span><b>GET</b> /api/vets</span>
+                      </div>
+                    </>
+                  )}
+                  {item.sketch === "shelves" && (
+                    <>
+                      <div className="mock-dep-card">
+                        <strong>Database</strong>
+                        <code>spring-data-jpa</code>
+                        <code>postgresql</code>
+                      </div>
+                      <div className="mock-dep-card">
+                        <strong>HTTP</strong>
+                        <code>spring-web</code>
+                      </div>
+                    </>
+                  )}
+                  {item.sketch === "term" && (
+                    <>
+                      <div className="mock-term-label">Run command</div>
+                      <code>./mvnw spring-boot:run</code>
+                    </>
+                  )}
+                  {item.sketch === "risk" && (
+                    <>
+                      <div className="mock-path">
+                        <span>Req</span>
+                        <i />
+                        <span className="is-hot">Repo</span>
+                        <i />
+                        <span className="is-hot">DB</span>
+                      </div>
+                      <div className="mock-path is-dim">
+                        <span>Req</span>
+                        <i />
+                        <span>Svc</span>
+                      </div>
+                    </>
+                  )}
+                  {item.sketch === "signals" && (
+                    <>
+                      <div className="mock-signal is-on"><s /><em>Tests</em></div>
+                      <div className="mock-signal is-on"><s /><em>CI</em></div>
+                      <div className="mock-signal"><s /><em>Cov</em></div>
+                    </>
+                  )}
                 </div>
-                <strong>{item.label}</strong>
-                <span>{item.hint}</span>
+                <div className="preview-copy">
+                  <span className="preview-index">{String(index + 1).padStart(2, "0")}</span>
+                  <div>
+                    <strong>{item.label}</strong>
+                    <span>{item.hint}</span>
+                  </div>
+                </div>
               </article>
             ))}
           </div>
