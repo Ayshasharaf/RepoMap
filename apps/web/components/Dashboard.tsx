@@ -10,11 +10,29 @@ import MermaidDiagram, { protectFlowLabels } from "./MermaidDiagram";
 const PHASE_LABEL: Record<string, string> = {
   clone:     "Cloning repository…",
   commit:    "Reading commit…",
-  scan:      "Scanning Java files…",
+  scan:      "Scanning repository…",
   overview:  "Building overview…",
   structure: "Reading structure…",
   diagram:   "Drawing architecture…",
 };
+
+const EXAMPLE_REPOS = [
+  {
+    url: "https://github.com/spring-projects/spring-petclinic",
+    label: "spring-petclinic",
+    hint: "Spring Boot · scored",
+  },
+  {
+    url: "https://github.com/pallets/flask",
+    label: "flask",
+    hint: "Python · architecture",
+  },
+  {
+    url: "https://github.com/expressjs/express",
+    label: "express",
+    hint: "Node · architecture",
+  },
+] as const;
 
 async function readScanStream(
   res: Response,
@@ -48,17 +66,7 @@ async function readScanStream(
   return result;
 }
 
-function kindLabel(kind: string) {
-  return {
-    scope_gap: "Scope gap",
-    n_plus_one: "N+1",
-    broken_relation: "Broken relation",
-    parse_error: "Parse error",
-    incomplete: "Not scanned",
-  }[kind] ?? kind;
-}
-
-type SectionId = "overview" | "modules" | "flow" | "endpoints" | "deps" | "entry" | "critical" | "health";
+type SectionId = "overview" | "modules" | "flow" | "endpoints" | "deps" | "entry" | "key" | "health";
 
 const NAV: { id: SectionId; label: string; hint: string; icon: string }[] = [
   { id: "overview",  label: "Overview",        hint: "What this repo is",         icon: "M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" },
@@ -67,7 +75,7 @@ const NAV: { id: SectionId; label: string; hint: string; icon: string }[] = [
   { id: "endpoints", label: "Endpoints",        hint: "Every HTTP route",          icon: "M4 6h16M4 12h16M4 18h10" },
   { id: "deps",      label: "Dependencies",     hint: "Libraries and links",       icon: "M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" },
   { id: "entry",     label: "Entry points",     hint: "How to run it",             icon: "M5 3l14 9-14 9V3z" },
-  { id: "critical",  label: "Critical paths",   hint: "Routes with findings",      icon: "M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" },
+  { id: "key",       label: "Key paths",        hint: "Routes that reach storage", icon: "M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" },
   { id: "health",    label: "Health",           hint: "Tests, CI, GitHub",         icon: "M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" },
 ];
 
@@ -78,7 +86,7 @@ const PREVIEWS = [
   { label: "Endpoints",      hint: "A filterable list of every HTTP route.",                                 sketch: "table" },
   { label: "Dependencies",   hint: "Libraries on shelves, named by what they are for.",                      sketch: "shelves" },
   { label: "Entry points",   hint: "The class that starts it, and the command that runs it.",                 sketch: "term" },
-  { label: "Critical paths", hint: "Only the routes that sit next to a finding.",                            sketch: "risk" },
+  { label: "Key paths",      hint: "Routes that reach a database or external system.",                       sketch: "risk" },
   { label: "Health",         hint: "Tests, CI, stars, and how big the latest commit is.",                    sketch: "signals" },
 ] as const;
 
@@ -99,21 +107,6 @@ const MODULE_ABOUT: Record<string, string> = {
   app: "DTOs, exceptions, and classes that are not one of the groups above.",
 };
 
-function findingClass(symbol: string) {
-  if (!symbol) return "";
-  const dot = symbol.indexOf(".");
-  return dot === -1 ? symbol : symbol.slice(0, dot);
-}
-
-function findingsForPath(path: FlowPath, findings: ScanResult["findings"]) {
-  return findings.filter((finding) => {
-    const owner = findingClass(finding.symbol);
-    const onHop = Boolean(owner) && path.hops.some((hop) => hop.name === owner);
-    const onRoute = Boolean(path.entry) && Boolean(finding.detail) && finding.detail.includes(path.entry);
-    return onHop || onRoute;
-  });
-}
-
 function NavIcon({ path }: { path: string }) {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -129,6 +122,7 @@ export default function Dashboard({ initialScans }: { initialScans: ScanResult[]
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [phase, setPhase] = useState<string>("");
+  const [scanningService, setScanningService] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sources, setSources] = useState<Record<string, string>>(() => {
     const saved: Record<string, string> = {};
@@ -144,10 +138,17 @@ export default function Dashboard({ initialScans }: { initialScans: ScanResult[]
     return sources[scan.service] || scan.source || "";
   }
 
+  function serviceFromUrl(raw: string) {
+    const match = raw.trim().match(/github\.com\/[^/]+\/([^/?#]+)/i);
+    return match ? match[1].replace(/\.git$/i, "") : "";
+  }
+
   async function runScan(rawUrl: string) {
     const trimmed = rawUrl.trim();
     if (!trimmed || loading) return;
+    const target = serviceFromUrl(trimmed);
     setLoading(true);
+    setScanningService(target || null);
     setPhase("Cloning repository…");
     setError(null);
     try {
@@ -178,6 +179,7 @@ export default function Dashboard({ initialScans }: { initialScans: ScanResult[]
     } finally {
       setLoading(false);
       setPhase("");
+      setScanningService(null);
     }
   }
 
@@ -217,10 +219,12 @@ export default function Dashboard({ initialScans }: { initialScans: ScanResult[]
           <div className="plaque-inner">
             <div className="kicker">Paste a repo</div>
             <h1>See how it is built.</h1>
-            <p>Map a public Spring Boot Java repository on GitHub. Then choose Overview, Architecture, Data flow, Endpoints, Dependencies, Entry points, Critical paths, or Health.</p>
+            <p>
+              Map any public GitHub repository. Architecture, data flow, endpoints, dependencies, and entry points — with deeper Spring Boot structure when the repo is Java.
+            </p>
             <p className="lang-note">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{display:"inline",verticalAlign:"-2px",marginRight:"5px"}}><circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/></svg>
-              Endpoints, findings, and the score are Spring Boot Java only. The architecture diagram works for any public repository when the scanner has an AI key.
+              Architecture maps any public repo when an AI key is set. Spring Boot Java repos also get entity and endpoint detail.
             </p>
             <form className="scan-form" onSubmit={handleScan}>
               <input
@@ -241,6 +245,22 @@ export default function Dashboard({ initialScans }: { initialScans: ScanResult[]
                 ) : "Map it"}
               </button>
             </form>
+            <div className="example-repos" role="group" aria-label="Example repositories">
+              <span className="example-repos-label">Try one</span>
+              {EXAMPLE_REPOS.map((example) => (
+                <button
+                  key={example.url}
+                  type="button"
+                  className="example-repo"
+                  disabled={loading}
+                  onClick={() => setUrl(example.url)}
+                  title={example.url}
+                >
+                  <strong>{example.label}</strong>
+                  <span>{example.hint}</span>
+                </button>
+              ))}
+            </div>
             {error && <div className="error">{error}</div>}
           </div>
         </section>
@@ -287,10 +307,11 @@ export default function Dashboard({ initialScans }: { initialScans: ScanResult[]
           <div className="sidebar-repos">
             {scans.map((scan) => {
               const source = sourceFor(scan);
+              const isScanning = loading && scanningService === scan.service;
               return (
                 <div
                   key={scan.service}
-                  className={`sidebar-repo${selected.service === scan.service ? " is-on" : ""}`}
+                  className={`sidebar-repo${selected.service === scan.service ? " is-on" : ""}${isScanning ? " is-scanning" : ""}`}
                 >
                   <button
                     type="button"
@@ -300,8 +321,12 @@ export default function Dashboard({ initialScans }: { initialScans: ScanResult[]
                   >
                     <span className="sidebar-repo-dot" />
                     <span className="sidebar-repo-name">{scan.service}</span>
-                    {scan.counts.risk === "High" && <span className="sidebar-badge sidebar-badge-risk">!</span>}
-                    {scan.counts.risk === "Medium" && <span className="sidebar-badge sidebar-badge-warn">~</span>}
+                    {isScanning ? (
+                      <span className="sidebar-repo-phase">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="spin-icon" aria-hidden="true"><path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0" /></svg>
+                        {phase || "Mapping…"}
+                      </span>
+                    ) : null}
                   </button>
                   <span className="sidebar-repo-actions">
                     <button
@@ -367,7 +392,13 @@ export default function Dashboard({ initialScans }: { initialScans: ScanResult[]
               ) : (
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M12 5l7 7-7 7" /></svg>
               )}
-              <span>{loading ? (phase || "Mapping…") : "Map repo"}</span>
+              <span>
+                {loading
+                  ? (scanningService && scans.some((scan) => scan.service === scanningService)
+                    ? "Scanning…"
+                    : (phase || "Mapping…"))
+                  : "Map repo"}
+              </span>
             </button>
           </form>
           {error && <div className="sidebar-error">{error}</div>}
@@ -465,14 +496,16 @@ function FlowBoard({
   classes,
   picked,
   onPick,
-  findings,
 }: {
   paths: FlowPath[];
   classes: FlowClass[];
   picked: string | null;
-  onPick: (name: string) => void;
-  findings?: ScanResult["findings"];
+  onPick: (name: string | null) => void;
 }) {
+  function hopKey(pathIndex: number, hopName: string) {
+    return `${pathIndex}::${hopName}`;
+  }
+
   return (
     <div className="rails">
       <div className="flow-legend">
@@ -481,11 +514,10 @@ function FlowBoard({
         <span className="fl-item"><i />Other step</span>
       </div>
       {paths.map((path, pathIndex) => {
-        const notes = findingsForPath(path, findings ?? []);
         const openName = picked?.startsWith(`${pathIndex}::`) ? picked.slice(picked.indexOf("::") + 2) : "";
         const open = openName ? classes.find((item) => item.name === openName) ?? null : null;
         return (
-          <article className={notes.length ? "rail is-risk" : "rail"} key={`${path.kind}-${path.entry}-${pathIndex}`}>
+          <article className="rail" key={`${path.kind}-${path.entry}-${pathIndex}`}>
             <div className="rail-head">
               <span className={`rail-kind-badge rk-${path.kind === "job" ? "job" : "http"}`}>
                 {path.kind === "job" ? "Schedule / Message" : "HTTP Request"}
@@ -500,13 +532,33 @@ function FlowBoard({
               </li>
               {path.hops.map((hop, index) => {
                 const tone = hopTone(hop.role);
-                const isOn = picked === `${pathIndex}::${hop.name}`;
+                const key = hopKey(pathIndex, hop.name);
+                const isOn = picked === key;
                 return (
                   <li className="flow-step-wrap" key={`${hop.role}-${hop.name}-${index}`}>
                     <button
                       type="button"
                       className={["flow-step", tone ? `is-${tone}` : "", isOn ? "is-on" : ""].filter(Boolean).join(" ")}
-                      onClick={() => onPick(`${pathIndex}::${hop.name}`)}
+                      aria-expanded={isOn}
+                      onClick={() => onPick(isOn ? null : key)}
+                      onKeyDown={(event) => {
+                        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                          event.preventDefault();
+                          const nextIndex = event.key === "ArrowDown"
+                            ? Math.min(path.hops.length - 1, index + 1)
+                            : Math.max(0, index - 1);
+                          onPick(hopKey(pathIndex, path.hops[nextIndex].name));
+                          const root = event.currentTarget.closest("ol");
+                          requestAnimationFrame(() => {
+                            root
+                              ?.querySelectorAll<HTMLButtonElement>("button.flow-step")
+                              [nextIndex]?.focus();
+                          });
+                        } else if (event.key === "Escape" && isOn) {
+                          event.preventDefault();
+                          onPick(null);
+                        }
+                      }}
                     >
                       <span className="fs-num">{index + 1}</span>
                       <HopIcon role={hop.role} />
@@ -521,16 +573,6 @@ function FlowBoard({
                 );
               })}
             </ol>
-            {notes.length > 0 && (
-              <div className="rail-notes">
-                {notes.map((finding, index) => (
-                  <p className="rail-note" key={`${finding.kind}-${index}`}>
-                    <span className={`tag tag-${finding.kind}`}>{kindLabel(finding.kind)}</span>
-                    {finding.detail}
-                  </p>
-                ))}
-              </div>
-            )}
           </article>
         );
       })}
@@ -586,6 +628,9 @@ function ArchBoard({
   const [picked, setPicked] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
   const [copied, setCopied] = useState(false);
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const zoomInnerRef = useRef<HTMLDivElement>(null);
+  const [natural, setNatural] = useState({ w: 0, h: 0 });
 
   useEffect(() => {
     setView(systemChart ? "system" : "modules");
@@ -603,6 +648,44 @@ function ArchBoard({
     ? `${sourceUrl.replace(/\.git$/, "")}/blob/${commit}/${pickedClass.file}`
     : "";
 
+  // Measure the unscaled diagram so transform:scale can expand the scroll area.
+  useEffect(() => {
+    const inner = zoomInnerRef.current;
+    if (!inner) return;
+    const measure = () => {
+      const svg = inner.querySelector("svg");
+      if (svg) {
+        const box = svg.viewBox?.baseVal;
+        const w = box?.width || svg.clientWidth || inner.scrollWidth;
+        const h = box?.height || svg.clientHeight || inner.scrollHeight;
+        setNatural({ w: Math.ceil(w), h: Math.ceil(h) });
+        return;
+      }
+      setNatural({ w: inner.scrollWidth, h: inner.scrollHeight });
+    };
+    measure();
+    const timer = window.setInterval(measure, 200);
+    const stop = window.setTimeout(() => window.clearInterval(timer), 2500);
+    const ro = new ResizeObserver(measure);
+    ro.observe(inner);
+    return () => {
+      window.clearInterval(timer);
+      window.clearTimeout(stop);
+      ro.disconnect();
+    };
+  }, [activeChart, view, service]);
+
+  function fitToCanvas() {
+    const canvas = canvasRef.current;
+    if (!canvas || natural.w <= 0) {
+      setZoom(1);
+      return;
+    }
+    const available = Math.max(120, canvas.clientWidth - 40);
+    const next = Math.min(1.5, Math.max(0.35, available / natural.w));
+    setZoom(Math.round(next * 100) / 100);
+  }
+
   async function copyMermaid() {
     try {
       await navigator.clipboard.writeText(activeChart);
@@ -618,20 +701,37 @@ function ArchBoard({
       <div className="diagram-toolbar">
         <div className="method-filters" role="group" aria-label="Diagram">
           {systemChart && (
-            <button type="button" className={view === "system" ? "is-on" : ""} onClick={() => { setView("system"); setPicked(null); }}>
+            <button type="button" className={view === "system" ? "is-on" : ""} onClick={() => { setView("system"); setPicked(null); setZoom(1); }}>
               System
             </button>
           )}
           {modulesChart && (
-            <button type="button" className={view === "modules" ? "is-on" : ""} onClick={() => { setView("modules"); setPicked(null); }}>
+            <button type="button" className={view === "modules" ? "is-on" : ""} onClick={() => { setView("modules"); setPicked(null); setZoom(1); }}>
               Modules
             </button>
           )}
         </div>
         <div className="diagram-toolbar-actions">
-          <button type="button" className="btn-ghost" onClick={() => setZoom((value) => Math.max(0.5, Math.round((value - 0.15) * 100) / 100))} aria-label="Zoom out">−</button>
-          <button type="button" className="btn-ghost" onClick={() => setZoom(1)}>Fit</button>
-          <button type="button" className="btn-ghost" onClick={() => setZoom((value) => Math.min(2, Math.round((value + 0.15) * 100) / 100))} aria-label="Zoom in">+</button>
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={() => setZoom((value) => Math.max(0.35, Math.round((value - 0.15) * 100) / 100))}
+            aria-label="Zoom out"
+          >
+            −
+          </button>
+          <button type="button" className="btn-ghost" onClick={() => fitToCanvas()} title="Fit diagram to the panel width">
+            Fit
+          </button>
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={() => setZoom((value) => Math.min(2.5, Math.round((value + 0.15) * 100) / 100))}
+            aria-label="Zoom in"
+          >
+            +
+          </button>
+          <span className="zoom-readout" aria-live="polite">{Math.round(zoom * 100)}%</span>
           <button type="button" className="btn-ghost" onClick={() => { void copyMermaid(); }} disabled={!activeChart}>
             {copied ? "Mermaid copied" : "Copy Mermaid"}
           </button>
@@ -639,15 +739,30 @@ function ArchBoard({
       </div>
 
       {activeChart ? (
-        <div className="diagram-canvas">
-          <div className="diagram-zoom" style={{ zoom }}>
-            <MermaidDiagram
-              chart={activeChart}
-              id={`${service}-${view}`}
-              selectable={selectable}
-              active={picked}
-              onPick={setPicked}
-            />
+        <div className="diagram-canvas" ref={canvasRef}>
+          <div
+            className="diagram-zoom-frame"
+            style={{
+              width: natural.w ? `${Math.ceil(natural.w * zoom)}px` : undefined,
+              height: natural.h ? `${Math.ceil(natural.h * zoom)}px` : undefined,
+            }}
+          >
+            <div
+              className="diagram-zoom"
+              ref={zoomInnerRef}
+              style={{
+                transform: `scale(${zoom})`,
+                transformOrigin: "top left",
+              }}
+            >
+              <MermaidDiagram
+                chart={activeChart}
+                id={`${service}-${view}`}
+                selectable={selectable}
+                active={picked}
+                onPick={setPicked}
+              />
+            </div>
           </div>
         </div>
       ) : (
@@ -990,11 +1105,10 @@ function DetailPanel({
     return () => { cancel = true; };
   }, [sourceUrl]);
 
-  const matchedPaths = paths.filter((path) => {
-    if (findingsForPath(path, scan.findings).length > 0) return true;
-    return scan.endpoints.some((endpoint) => endpoint.scopeGap && endpoint.path && path.entry.includes(endpoint.path));
-  });
-  const criticalPaths = matchedPaths.length > 0 ? matchedPaths : paths.slice(0, 1);
+  const keyPaths = paths.filter((path) =>
+    path.hops.some((hop) => /repository|entity|database|db|dao|mapper/i.test(`${hop.role} ${hop.name}`))
+  );
+  const shownPaths = keyPaths.length > 0 ? keyPaths : paths.slice(0, 8);
 
   const pageTitle: Record<Exclude<SectionId, "overview">, { title: string; hint: string }> = {
     modules:  { title: "Architecture",   hint: "The system as a diagram. Click a box to see the classes in it. Copy Mermaid if you want the source." },
@@ -1002,7 +1116,7 @@ function DetailPanel({
     deps:     { title: "Dependencies",   hint: "Which group uses which, then the libraries in the build file." },
     endpoints:{ title: "Endpoints",      hint: "Every HTTP route this scan found. Filter by method, path, or entity." },
     entry:    { title: "Entry points",   hint: "If you want to run this, start here." },
-    critical: { title: "Critical paths", hint: "The main request path. A route is also listed when a finding names a step on it, or when that URL is marked as missing tenant scope." },
+    key:      { title: "Key paths",      hint: "Request paths that reach persistence or storage. Click a step to see its methods." },
     health:   { title: "Health",         hint: "Test files, CI workflows, and the latest commit from the clone. Stars and open issues from GitHub." },
   };
 
@@ -1044,19 +1158,12 @@ function DetailPanel({
             {section === "endpoints" && <EndpointBoard scan={scan} />}
             {section === "deps" && <Dependencies scan={scan} />}
             {section === "entry" && <Runbook scan={scan} />}
-            {section === "critical" && (
-              <>
-                <ul className="rule">
-                  <li className="is-warn"><b>N+1</b> A query runs inside a loop, on a class this route calls.</li>
-                  <li className="is-risk"><b>Scope gap</b> A repository method returns a tenant-owned record without a tenant id, or the URL is marked as missing scope.</li>
-                  <li className="is-risk"><b>Broken relation</b> An entity this route touches points at another entity in a way the fields do not match.</li>
-                </ul>
-                {paths.length > 0 ? (
-                  <FlowBoard paths={criticalPaths} classes={flowClasses} picked={picked} onPick={setPicked} findings={scan.findings} />
-                ) : (
-                  <p className="summary">Map this repo again. This result has no request path yet.</p>
-                )}
-              </>
+            {section === "key" && (
+              paths.length > 0 ? (
+                <FlowBoard paths={shownPaths} classes={flowClasses} picked={picked} onPick={setPicked} />
+              ) : (
+                <p className="summary">Map this repo again. This result has no request path yet.</p>
+              )
             )}
             {section === "health" && <HealthBoard scan={scan} meta={meta} />}
           </section>
@@ -1133,67 +1240,30 @@ function DiffBoard({ scan }: { scan: ScanResult }) {
   const previous = scan.previous;
   if (!previous) return null;
   const diff = compareScans(scan, previous);
-  const scoreDelta = diff.scoreAfter - diff.scoreBefore;
   const entityDelta = diff.entitiesAfter - diff.entitiesBefore;
+  const structureSame =
+    entityDelta === 0 &&
+    diff.entitiesAdded.length === 0 &&
+    diff.entitiesRemoved.length === 0;
   return (
     <section className="diff-card">
       <div className="diff-head">
         <h2 className="section-title">Since last scan</h2>
         <p>Compared with the previous result stored for this repo.</p>
       </div>
-      {diff.unchanged ? (
-        <p className="summary">Findings, entities, and risk score are the same.</p>
+      {structureSame ? (
+        <p className="summary">Entities and structure look the same as the last scan.</p>
       ) : (
         <>
           <div className="diff-stats">
-            <article>
-              <span>Risk</span>
-              <strong>{diff.riskBefore} → {diff.riskAfter}</strong>
-              <em>Score {diff.scoreBefore} → {diff.scoreAfter} ({scoreDelta > 0 ? `+${scoreDelta}` : scoreDelta})</em>
-            </article>
             <article>
               <span>Entities</span>
               <strong>{diff.entitiesBefore} → {diff.entitiesAfter}</strong>
               <em>{entityDelta > 0 ? `+${entityDelta}` : entityDelta}</em>
             </article>
-            <article>
-              <span>Findings</span>
-              <strong>{diff.added.length} added</strong>
-              <em>{diff.removed.length} removed</em>
-            </article>
           </div>
           {diff.entitiesAdded.length > 0 && <p className="summary">New entities: {diff.entitiesAdded.join(", ")}</p>}
           {diff.entitiesRemoved.length > 0 && <p className="summary">Removed entities: {diff.entitiesRemoved.join(", ")}</p>}
-          {diff.added.length > 0 && (
-            <div className="finding-block">
-              <h3 className="section-title">Added</h3>
-              <div className="finding-grid">
-                {diff.added.map((finding, index) => (
-                  <article className="finding-card" key={`add-${finding.kind}-${finding.file}-${finding.symbol}-${index}`}>
-                    <span className={`tag tag-${finding.kind}`}>{kindLabel(finding.kind)}</span>
-                    <strong>{finding.symbol || kindLabel(finding.kind)}</strong>
-                    <p>{finding.detail}</p>
-                    {finding.file && <span className="finding-file">{finding.file}</span>}
-                  </article>
-                ))}
-              </div>
-            </div>
-          )}
-          {diff.removed.length > 0 && (
-            <div className="finding-block">
-              <h3 className="section-title">Removed</h3>
-              <div className="finding-grid">
-                {diff.removed.map((finding, index) => (
-                  <article className="finding-card is-removed" key={`rm-${finding.kind}-${finding.file}-${finding.symbol}-${index}`}>
-                    <span className={`tag tag-${finding.kind}`}>{kindLabel(finding.kind)}</span>
-                    <strong>{finding.symbol || kindLabel(finding.kind)}</strong>
-                    <p>{finding.detail}</p>
-                    {finding.file && <span className="finding-file">{finding.file}</span>}
-                  </article>
-                ))}
-              </div>
-            </div>
-          )}
         </>
       )}
     </section>
@@ -1255,7 +1325,6 @@ function EndpointBoard({ scan }: { scan: ScanResult }) {
                 <th>Method</th>
                 <th>Path</th>
                 <th>Entity</th>
-                <th>Scope</th>
               </tr>
             </thead>
             <tbody>
@@ -1264,7 +1333,6 @@ function EndpointBoard({ scan }: { scan: ScanResult }) {
                   <td><span className={`method method-${(endpoint.method || "other").toLowerCase()}`}>{endpoint.method || "—"}</span></td>
                   <td><code>{endpoint.path}</code></td>
                   <td>{endpoint.entity || "—"}</td>
-                  <td>{endpoint.scopeGap ? <span className="tag tag-scope_gap">Scope gap</span> : "Ok"}</td>
                 </tr>
               ))}
             </tbody>
@@ -1273,6 +1341,16 @@ function EndpointBoard({ scan }: { scan: ScanResult }) {
       )}
     </div>
   );
+}
+
+function plainBlurb(text: string): string {
+  return text
+    .replace(/<[^>]+>/g, " ")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/[#*_`]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function OverviewBoard({
@@ -1288,7 +1366,7 @@ function OverviewBoard({
 }) {
   const overview = scan.overview;
   const identity = overview?.identity;
-  const why = identity?.why || meta?.description || "";
+  const why = plainBlurb(identity?.why || meta?.description || "");
   const libraries = overview?.dependencies.external.length ?? 0;
   const run = overview?.checklist.find((step) => step.title === "Run locally")?.detail
     || overview?.checklist.find((step) => step.title === "Tests")?.detail
@@ -1298,9 +1376,6 @@ function OverviewBoard({
     { value: String(scan.endpoints.length), label: "Endpoints", nav: "endpoints" as SectionId },
     { value: String(scan.entities.length), label: "Entities", nav: "modules" as SectionId },
     { value: String(libraries), label: "Libraries", nav: "deps" as SectionId },
-    { value: String(scan.counts.scopeGaps), label: "Scope gaps", nav: "critical" as SectionId },
-    { value: String(scan.counts.nPlusOne), label: "N+1 queries", nav: "critical" as SectionId },
-    { value: String(scan.counts.brokenRelations), label: "Broken relations", nav: "critical" as SectionId },
   ];
   const facts = [
     ["Language", identity?.language || meta?.language || ""],
@@ -1310,9 +1385,6 @@ function OverviewBoard({
     ["Stars", meta?.stars != null ? formatCount(meta.stars) : ""],
     ["Run", run],
   ].filter(([, value]) => value);
-  const listed = scan.findings.filter((finding) => finding.file || finding.symbol);
-
-  const riskColor = { High: "var(--risk)", Medium: "var(--warn)", Low: "var(--ok)", Unscored: "var(--muted)" }[scan.counts.risk] ?? "var(--muted)";
 
   return (
     <div className="cover">
@@ -1321,21 +1393,29 @@ function OverviewBoard({
           <div className="overview-header-main">
             <p className="eyebrow">Overview</p>
             <h1 className="page-head-title">{scan.service}</h1>
-            {why && <p className="why"><RichLine text={why} /></p>}
-            {scan.summary && <p className="summary">{scan.summary}</p>}
+            {why && <p className="why">{why}</p>}
+            {scan.summary && !scan.summary.startsWith("<") && (
+              <p className="summary">
+                {plainBlurb(scan.summary)
+                  .replace(/,?\s*\d+\s+findings?/i, "")
+                  .replace(/\s+,/g, ",")
+                  .replace(/\s+/g, " ")
+                  .trim()}
+              </p>
+            )}
+            <div className="overview-meta-row">
+              {identity?.language && <span className="overview-chip">{identity.language}</span>}
+              {(identity?.stack ?? []).slice(0, 3).map((item) => (
+                <span className="overview-chip" key={item}>{item}</span>
+              ))}
+            </div>
             <ScanActions scan={scan} />
-          </div>
-          <div className="risk-pill" style={{ borderColor: riskColor, color: riskColor }}>
-            <span className="risk-pill-label">Risk</span>
-            <span className="risk-pill-value">{scan.counts.risk}</span>
-            <span className="risk-pill-score">Score {scan.counts.score}</span>
           </div>
         </div>
       </header>
 
       {scan.previous && <DiffBoard scan={scan} />}
 
-      {/* Metric cards */}
       <div className="figures">
         {figures.map((item) => (
           <button
@@ -1360,25 +1440,6 @@ function OverviewBoard({
             </div>
           ))}
         </dl>
-      )}
-
-      {listed.length > 0 && (
-        <div className="finding-block">
-          <div className="finding-block-head">
-            <h2 className="section-title">Findings</h2>
-            <button type="button" className="link-btn" onClick={() => onNavigate("critical")}>View critical paths →</button>
-          </div>
-          <div className="finding-grid">
-            {listed.map((finding, index) => (
-              <article className="finding-card" key={`${finding.kind}-${finding.file}-${finding.symbol}-${index}`}>
-                <span className={`tag tag-${finding.kind}`}>{kindLabel(finding.kind)}</span>
-                <strong>{finding.symbol || kindLabel(finding.kind)}</strong>
-                <p>{finding.detail}</p>
-                {finding.file && <span className="finding-file">{finding.file}</span>}
-              </article>
-            ))}
-          </div>
-        </div>
       )}
     </div>
   );

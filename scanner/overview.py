@@ -386,8 +386,8 @@ def _why(root: Path) -> str:
         return ""
     parts: list[str] = []
     for line in readme.read_text(encoding="utf-8", errors="ignore").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or stripped.startswith("![") or stripped.startswith("[!"):
+        stripped = _clean_why_line(line)
+        if not stripped:
             if parts:
                 break
             continue
@@ -396,6 +396,23 @@ def _why(root: Path) -> str:
             break
     text = re.sub(r"\s+", " ", " ".join(parts)).strip()
     return text[:220].rstrip()
+
+
+def _clean_why_line(line: str) -> str:
+    """README first paragraph without HTML tags, badges, or headings."""
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#") or stripped.startswith("![") or stripped.startswith("[!"):
+        return ""
+    if stripped.startswith("```") or stripped.startswith("---"):
+        return ""
+    text = re.sub(r"<[^>]+>", " ", stripped)
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", text)
+    text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
+    text = re.sub(r"[*_`]+", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text or text.startswith("<") or len(text) < 8:
+        return ""
+    return text
 
 
 def _license(root: Path) -> str:

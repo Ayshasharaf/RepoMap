@@ -133,32 +133,27 @@ def apply_structure(root: str, data: dict) -> None:
     if not identity.get("license"):
         identity["license"] = _license(base)
 
-    # ---- ERD (entity-relationship diagram) from ORM models -----------------
+    # ---- diagrams ----------------------------------------------------------
+    # Always fill static erd / dataFlow / criticalPaths when empty so the UI
+    # is never blank. When an AI key is set, apply_architecture may replace
+    # them with Groq charts; the static drawings stay as fallback.
     diagrams = data.setdefault("diagrams", {})
     if not diagrams.get("erd"):
         models = _extract_models(base, files)
         if models:
             diagrams["erd"] = _erd_diagram(models)
-            # expose model names as lightweight entities for the frontend
             if not data.get("entities"):
                 data["entities"] = [{"name": m["name"], "tenantOwned": False} for m in models]
-            # build relations from FK/relationship fields
             if not data.get("relations"):
                 data["relations"] = _model_relations(models)
-
-    # ---- data flow diagram (static import trace) ---------------------------
     if not diagrams.get("dataFlow"):
         diagrams["dataFlow"] = _data_flow_diagram(base, data, files, imports)
-
-    # ---- critical paths ----------------------------------------------------
     if not diagrams.get("criticalPaths"):
         diagrams["criticalPaths"] = _critical_paths_diagram(base, data, files, imports)
 
-    # ---- architecture diagram ----------------------------------------------
-    # When Groq is configured, leave the visual for apply_architecture.
-    # Still attach %% path comments so Data flow / Critical paths have routes
-    # if the model call fails.
     if _ai_ready():
+        # Leave the architecture visual for apply_architecture; keep %% path
+        # comments so Data flow / Critical paths still have route metadata.
         _install_path_comments(base, data, files, imports)
     else:
         _install_diagram(base, data, files, imports)
@@ -536,9 +531,20 @@ def _erd_diagram(models: list[dict]) -> str:
         for f in model.get("fields") or []:
             if f["type"] in ("rel", "relation"):
                 continue
-            safe_type = re.sub(r"[^A-Za-z0-9_]", "_", str(f["type"] or "?"))
+            # Mermaid: PK/FK/UK are key suffixes, never the type word.
+            raw = str(f.get("type") or "string").strip() or "string"
+            key = ""
+            if raw.upper() in {"PK", "FK", "UK"}:
+                key = raw.upper()
+                raw = "string"
+            safe_type = re.sub(r"[^A-Za-z0-9_]", "_", raw).strip("_") or "string"
+            if safe_type.upper() in {"PK", "FK", "UK"}:
+                key = safe_type.upper()
+                safe_type = "string"
+            if f.get("fk") and not key:
+                key = "FK"
             safe_name = re.sub(r"[^A-Za-z0-9_]", "_", str(f["name"] or "field"))
-            entity_lines.append(f"    {safe_type} {safe_name}")
+            entity_lines.append(f"    {safe_type} {safe_name}" + (f" {key}" if key else ""))
         entity_lines.append("  }")
         lines.extend(entity_lines)
 
@@ -1364,8 +1370,8 @@ def _why(root: Path) -> str:
         return ""
     parts: list[str] = []
     for line in readme.read_text(encoding="utf-8", errors="ignore").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or stripped.startswith("![") or stripped.startswith("[!"):
+        stripped = _clean_why_line(line)
+        if not stripped:
             if parts:
                 break
             continue
@@ -1374,6 +1380,22 @@ def _why(root: Path) -> str:
             break
     text = re.sub(r"\s+", " ", " ".join(parts)).strip()
     return text[:220].rstrip()
+
+
+def _clean_why_line(line: str) -> str:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#") or stripped.startswith("![") or stripped.startswith("[!"):
+        return ""
+    if stripped.startswith("```") or stripped.startswith("---"):
+        return ""
+    text = re.sub(r"<[^>]+>", " ", stripped)
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", text)
+    text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
+    text = re.sub(r"[*_`]+", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text or text.startswith("<") or len(text) < 8:
+        return ""
+    return text
 
 
 def _license(root: Path) -> str:

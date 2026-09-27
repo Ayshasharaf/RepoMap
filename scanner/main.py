@@ -50,20 +50,35 @@ def _prepare(url: str) -> tuple[str, str, str]:
 
 
 def _clone_and_scan(clean_url: str, repo_slug: str, progress=None, page_url: str = "") -> dict:
-    tmp_dir = tempfile.mkdtemp()
+    tmp_dir = tempfile.mkdtemp(prefix="repomap-")
     try:
         try:
+            # Skip hook templates — sandboxes often block writes under .git/hooks.
+            env = os.environ.copy()
+            env["GIT_TERMINAL_PROMPT"] = "0"
+            env["GIT_OPTIONAL_LOCKS"] = "0"
             subprocess.run(
-                ["git", "clone", "--depth", "1", clean_url, tmp_dir],
+                [
+                    "git",
+                    "-c", "core.hooksPath=/dev/null",
+                    "-c", "advice.detachedHead=false",
+                    "clone",
+                    "--depth", "1",
+                    "--single-branch",
+                    clean_url,
+                    tmp_dir,
+                ],
                 timeout=45,
                 check=True,
                 capture_output=True,
                 text=True,
+                env=env,
             )
         except subprocess.TimeoutExpired:
             raise HTTPException(status_code=504, detail="Clone timed out after 45 seconds")
         except subprocess.CalledProcessError as exc:
-            raise HTTPException(status_code=422, detail=f"Clone failed: {exc.stderr.strip()}")
+            detail = (exc.stderr or exc.stdout or "").strip() or "git clone failed"
+            raise HTTPException(status_code=422, detail=f"Clone failed: {detail}")
 
         if progress:
             progress({"type": "status", "phase": "commit", "file": "", "index": 0, "total": 0})

@@ -31,7 +31,9 @@ _SKIP_DIR = {
     "target", ".next", "coverage", "__pycache__", ".venv", "venv",
 }
 _EXCLUDED = re.compile(
-    r"(^|/)(?:tests?|__tests__|testdata|fixtures?|examples?|docs?|benchmarks?|migrations?|assets)(/|$)"
+    # Segment names only — do NOT use examples? (that matches "example" and
+    # wipes every Spring tutorial package under com/example/...).
+    r"(^|/)(?:test|tests|__tests__|testdata|fixtures?|examples|docs?|benchmarks?|migrations?|assets)(/|$)"
     r"|(?:\.test|\.spec)\.",
     re.I,
 )
@@ -73,8 +75,8 @@ Every other node is shape "box" and has a group.
 Draw the call flow the index supports: each caller to the entry points they use, entry points to services, services to data access, data access to the database, plus cross-links such as security loading users or controllers rendering views. An edge needs a "uses" hint, a shared name, or a README sentence. Do not connect unrelated siblings.
 endpoints: include one only when a symbol or the README shows that method and path. Otherwise [].
 erd_entities: only models visible in the index. Otherwise [].
-data_flow: the main request chain using existing node ids. Otherwise [].
-critical_paths: routes that reach a database or external service. Otherwise [].
+data_flow: REQUIRED for an application. List the main request chain using existing node ids (caller → entry → service → persistence → database). Empty only for a tiny library with no call path.
+critical_paths: REQUIRED when endpoints or a clear request path exist. Each hop is a node label or id. Empty only when no route reaches a store.
 """
 
 
@@ -625,6 +627,13 @@ def _group_for(role: str, groups: list[dict]) -> str:
 def _cover_index(graph: dict, index: str, paths: set[str]) -> dict:
     """Add index components the model skipped so every layer is on the chart."""
     covered = {node["path"] for node in graph["nodes"] if node.get("path")}
+    path_to_id = {node["path"]: node["id"] for node in graph["nodes"] if node.get("path")}
+    stem_to_id: dict[str, str] = {}
+    for node in graph["nodes"]:
+        stem = Path((node.get("path") or node["id"])).stem.lower()
+        stem_to_id.setdefault(stem, node["id"])
+        stem_to_id.setdefault(node["id"].lower(), node["id"])
+        stem_to_id.setdefault(re.sub(r"[^a-z0-9]", "", node["label"].lower()), node["id"])
 
     def present(path: str) -> bool:
         for existing in covered:
@@ -632,22 +641,11 @@ def _cover_index(graph: dict, index: str, paths: set[str]) -> dict:
                 return True
         return False
 
-    model_paths: list[str] = []
-    for line in index.splitlines():
-        if " | " not in line:
-            continue
-        path, role = [part.strip() for part in line.split("|", 2)[:2]]
-        if role == "model" and path in paths:
-            model_paths.append(path)
-            continue
-        if role == "code" and not re.search(r"application|main|server|program", path, re.I):
-            continue
-        if role not in {"web", "access", "service", "persistence", "view", "config", "code"}:
-            continue
+    def add_node(path: str, role: str, label: str | None = None) -> str | None:
         if path not in paths or present(path) or len(graph["nodes"]) >= MAX_NODES:
-            continue
+            return path_to_id.get(path)
         stem = path.rsplit("/", 1)[-1]
-        label = "Views" if role == "view" and "." not in stem else _human_name(Path(stem).stem)
+        shown = label or ("Views" if role == "view" and "." not in stem else _human_name(Path(stem).stem))
         nid = stem.replace(".", "_")
         taken = {node["id"] for node in graph["nodes"]}
         suffix = 2
@@ -656,24 +654,110 @@ def _cover_index(graph: dict, index: str, paths: set[str]) -> dict:
             suffix += 1
         graph["nodes"].append({
             "id": nid,
-            "label": label,
+            "label": shown,
             "group": _group_for(role, graph["groups"]),
             "path": path,
             "shape": "box",
         })
         covered.add(path)
+        path_to_id[path] = nid
+        stem_to_id.setdefault(Path(stem).stem.lower(), nid)
+        return nid
+
+    model_paths: list[str] = []
+    use_links: list[tuple[str, str]] = []
+    for line in index.splitlines():
+        if " | " not in line:
+            continue
+        parts = [part.strip() for part in line.split("|")]
+        path, role = parts[0], parts[1]
+        uses: list[str] = []
+        for part in parts[2:]:
+            if part.lower().startswith("uses "):
+                uses = [token.strip() for token in part[5:].split(",") if token.strip()]
+        if role == "model" and path in paths:
+            model_paths.append(path)
+            continue
+        if role == "code" and not re.search(r"application|main|server|program", path, re.I):
+            continue
+        if role not in {"web", "access", "service", "persistence", "view", "config", "code"}:
+            continue
+        nid = add_node(path, role)
+        if nid:
+            for used in uses:
+                use_links.append((nid, used))
 
     if model_paths and not any(present(path) for path in model_paths) and len(graph["nodes"]) < MAX_NODES:
         folders = [path.rsplit("/", 1)[0] for path in model_paths if "/" in path]
         folder = folders[0] if folders and len(set(folders)) == 1 else model_paths[0]
         if folder in paths:
-            graph["nodes"].append({
-                "id": "domain_models",
-                "label": "Domain models",
-                "group": _group_for("model", graph["groups"]),
-                "path": folder,
-                "shape": "box",
-            })
+            add_node(folder, "model", "Domain models")
+
+    # Ensure a database sink when persistence/models exist.
+    has_store = any(node.get("shape") == "database" for node in graph["nodes"])
+    has_data = any(
+        (node.get("path") or "").lower().find("repositor") >= 0
+        or "persist" in (node.get("group") or "").lower()
+        or node.get("id") == "domain_models"
+        for node in graph["nodes"]
+    )
+    if has_data and not has_store and len(graph["nodes"]) < MAX_NODES:
+        graph["nodes"].append({
+            "id": "database",
+            "label": "Database",
+            "group": _group_for("persistence", graph["groups"]),
+            "path": None,
+            "shape": "database",
+        })
+        stem_to_id["database"] = "database"
+
+    # Wire "uses" hints from the index so recovered nodes are not orphans.
+    seen_edges = {(edge["from"], edge["to"]) for edge in graph["edges"]}
+    for src, used in use_links:
+        dst = stem_to_id.get(used.lower()) or stem_to_id.get(re.sub(r"[^a-z0-9]", "", used.lower()))
+        if not dst or src == dst or (src, dst) in seen_edges:
+            continue
+        if len(graph["edges"]) >= MAX_EDGES:
+            break
+        graph["edges"].append({"from": src, "to": dst, "label": "uses"})
+        seen_edges.add((src, dst))
+
+    # Bridge layers when the model left almost no edges.
+    if len(graph["edges"]) < 3:
+        by_role: dict[str, list[str]] = {}
+        for node in graph["nodes"]:
+            path = (node.get("path") or "").lower()
+            if node.get("shape") == "circle":
+                by_role.setdefault("actor", []).append(node["id"])
+            elif node.get("shape") == "database":
+                by_role.setdefault("database", []).append(node["id"])
+            elif "controller" in path or "/controllers/" in path:
+                by_role.setdefault("web", []).append(node["id"])
+            elif "service" in path:
+                by_role.setdefault("service", []).append(node["id"])
+            elif "repositor" in path or "mapper" in path:
+                by_role.setdefault("persistence", []).append(node["id"])
+            elif "entity" in path or "model" in path or node["id"] == "domain_models":
+                by_role.setdefault("model", []).append(node["id"])
+        chain = [
+            ("actor", "web", "requests"),
+            ("web", "service", "delegates"),
+            ("service", "persistence", "loads"),
+            ("persistence", "model", "maps"),
+            ("persistence", "database", "reads and writes"),
+            ("model", "database", "stored in"),
+        ]
+        for left, right, label in chain:
+            sources = by_role.get(left) or []
+            targets = by_role.get(right) or []
+            for src in sources[:4]:
+                for dst in targets[:3]:
+                    if src == dst or (src, dst) in seen_edges:
+                        continue
+                    if len(graph["edges"]) >= MAX_EDGES:
+                        return graph
+                    graph["edges"].append({"from": src, "to": dst, "label": label})
+                    seen_edges.add((src, dst))
     return graph
 
 
@@ -1022,6 +1106,7 @@ def generate_architecture(root: str, complete=None) -> tuple[str, list[dict], di
     if best is None:
         return None
     best = _cover_index(best, index, paths)
+    best = _fill_flow_gaps(best)
     routes = [
         {"method": item["method"], "path": item["path"], "entity": item.get("entity"), "scopeGap": False}
         for item in best.get("endpoints") or []
@@ -1034,6 +1119,81 @@ def generate_architecture(root: str, complete=None) -> tuple[str, list[dict], di
     return _compile(base, best), routes, extra
 
 
+def _fill_flow_gaps(graph: dict) -> dict:
+    """If Groq omitted data_flow / critical_paths, derive them from the architecture edges."""
+    nodes = {node["id"]: node for node in graph.get("nodes") or []}
+    edges = graph.get("edges") or []
+    if not graph.get("data_flow") and edges:
+        starts = [node["id"] for node in graph["nodes"] if node.get("shape") == "circle"]
+        if not starts:
+            incoming = {edge["to"] for edge in edges}
+            starts = [node["id"] for node in graph["nodes"] if node["id"] not in incoming]
+        if starts:
+            outgoing: dict[str, list[str]] = {}
+            for edge in edges:
+                outgoing.setdefault(edge["from"], []).append(edge["to"])
+            flow = []
+            seen = set()
+            current = starts[0]
+            while current and current not in seen:
+                seen.add(current)
+                nxt = next((dst for dst in outgoing.get(current, []) if dst not in seen), "")
+                if not nxt:
+                    break
+                label = next(
+                    (edge["label"] for edge in edges if edge["from"] == current and edge["to"] == nxt),
+                    "calls",
+                )
+                flow.append({"from": current, "to": nxt, "label": label})
+                current = nxt
+            graph["data_flow"] = flow
+    if not graph.get("critical_paths") and (graph.get("data_flow") or edges):
+        hops = []
+        for step in graph.get("data_flow") or []:
+            if step["from"] not in hops:
+                hops.append(step["from"])
+            if step["to"] not in hops:
+                hops.append(step["to"])
+        if len(hops) >= 2:
+            labels = [nodes.get(hid, {}).get("label") or hid for hid in hops]
+            dest = "DB"
+            if any(nodes.get(hid, {}).get("shape") == "database" for hid in hops):
+                dest = "DB"
+            graph["critical_paths"] = [{
+                "method": "",
+                "path": "main",
+                "hops": labels[:6],
+                "dest": dest,
+            }]
+            for endpoint in graph.get("endpoints") or []:
+                handler = endpoint.get("handler") or ""
+                if handler not in nodes:
+                    continue
+                chain = [handler]
+                outgoing = {}
+                for edge in edges:
+                    outgoing.setdefault(edge["from"], []).append(edge["to"])
+                seen = {handler}
+                current = handler
+                while current in outgoing:
+                    nxt = next((dst for dst in outgoing[current] if dst not in seen), "")
+                    if not nxt:
+                        break
+                    seen.add(nxt)
+                    chain.append(nxt)
+                    current = nxt
+                if len(chain) >= 2:
+                    graph["critical_paths"].append({
+                        "method": endpoint.get("method") or "",
+                        "path": endpoint.get("path") or "",
+                        "hops": [nodes[hid]["label"] for hid in chain if hid in nodes][:6],
+                        "dest": "DB",
+                    })
+                if len(graph["critical_paths"]) >= 6:
+                    break
+    return graph
+
+
 def _compile_erd(entities: list[dict]) -> str:
     """Build an erDiagram from the model list returned by the AI."""
     if not entities:
@@ -1044,9 +1204,7 @@ def _compile_erd(entities: list[dict]) -> str:
         name = _mermaid_id(str(entity.get("name") or "Unknown"))
         lines.append(f"  {name} {{")
         for f in entity.get("fields") or []:
-            fname = re.sub(r"[^A-Za-z0-9_]", "_", str(f.get("name") or "field")).strip("_") or "field"
-            ftype = re.sub(r"[^A-Za-z0-9_]", "_", str(f.get("type") or "string")).strip("_") or "string"
-            lines.append(f"    {ftype} {fname}")
+            lines.append(_erd_attr_line(f.get("name"), f.get("type"), bool(f.get("ref"))))
         lines.append("  }")
     for entity in entities:
         src = _mermaid_id(str(entity.get("name") or ""))
@@ -1055,6 +1213,24 @@ def _compile_erd(entities: list[dict]) -> str:
             if ref and ref in model_names and ref != src:
                 lines.append(f'  {src} }}o--|| {ref} : "ref"')
     return "\n".join(lines)
+
+
+def _erd_attr_line(name, ftype, is_fk: bool = False) -> str:
+    """Mermaid attribute line. PK/FK/UK are key suffixes, never the type."""
+    fname = re.sub(r"[^A-Za-z0-9_]", "_", str(name or "field")).strip("_") or "field"
+    raw = str(ftype or "string").strip() or "string"
+    key = ""
+    upper = raw.upper()
+    if upper in {"PK", "FK", "UK"}:
+        key = upper
+        raw = "string"
+    raw = re.sub(r"[^A-Za-z0-9_]", "_", raw).strip("_") or "string"
+    if raw.upper() in {"PK", "FK", "UK"}:
+        key = raw.upper()
+        raw = "string"
+    if is_fk and not key:
+        key = "FK"
+    return f"    {raw} {fname}" + (f" {key}" if key else "")
 
 
 def _compile_data_flow(flow: list[dict], graph: dict) -> str:
@@ -1166,15 +1342,26 @@ def apply_architecture(root: str, data: dict) -> None:
             if not line.startswith(("%% flow\t", "%% path\t", "%% diagram\t"))
         )
     diagrams["architecture"] = chart if not comments else chart + "\n" + "\n".join(comments)
-    # Groq charts win over the static tree drawings for these views.
+    # Prefer Groq charts when present; keep static drawings when the model
+    # left a view empty (after _fill_flow_gaps) so the page is never blank.
     if extra.get("erd"):
         diagrams["erd"] = extra["erd"]
     if extra.get("dataFlow"):
         diagrams["dataFlow"] = extra["dataFlow"]
     if extra.get("criticalPaths"):
         diagrams["criticalPaths"] = extra["criticalPaths"]
+    # Hide the static Modules chart so Architecture shows only the Groq drawing.
+    overview = data.setdefault("overview", {})
+    overview["moduleDiagram"] = ""
     if routes and not data.get("endpoints"):
         data["endpoints"] = routes
+    print(
+        "[repomap] groq charts:"
+        f" architecture={bool(chart)}"
+        f" erd={bool(diagrams.get('erd'))}"
+        f" dataFlow={bool(diagrams.get('dataFlow'))}"
+        f" criticalPaths={bool(diagrams.get('criticalPaths'))}"
+    )
 
 
 def _restore_static_architecture(root: str, data: dict) -> None:

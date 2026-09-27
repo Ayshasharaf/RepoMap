@@ -1368,7 +1368,16 @@ def _make_diagrams(entities: dict, relations: list[dict], endpoints: list[dict],
         if not fields:
             erd_lines.append("    Object id")
         for fname, ftype in sorted(fields.items()):
-            erd_lines.append(f"    {_mermaid_id(ftype or 'Object')} {_mermaid_id(fname)}")
+            raw = str(ftype or "Object").strip() or "Object"
+            key = ""
+            if raw.upper() in {"PK", "FK", "UK"}:
+                key = raw.upper()
+                raw = "string"
+            safe_type = _mermaid_id(raw)
+            if safe_type.upper() in {"PK", "FK", "UK"}:
+                key = safe_type.upper()
+                safe_type = "string"
+            erd_lines.append(f"    {safe_type} {_mermaid_id(fname)}" + (f" {key}" if key else ""))
         erd_lines.append("  }")
     for rel in relations:
         arrow = "||--o{" if "Many" in rel["kind"] else "||--||"
@@ -1543,7 +1552,12 @@ def scan_directory(root: str, commit: str = "local", progress=None) -> dict:
 
     if not all_java:
         from structure import apply_structure
-        result = _unscored(root, commit, "No Java files found")
+        result = _unscored(
+            root,
+            commit,
+            "No Java files found. Spring Boot risk score is Unscored; "
+            "overview, dependencies, entry points, and architecture still apply.",
+        )
         result["scannedFiles"] = []
         apply_structure(root, result)
         return result
@@ -1558,7 +1572,12 @@ def scan_directory(root: str, commit: str = "local", progress=None) -> dict:
     watch.phase = "routes"
     flow, classes = _scan_flow(watch, entity_map, root)
     if not entity_map:
-        result = _unscored(root, commit, "No @Entity classes found")
+        result = _unscored(
+            root,
+            commit,
+            "No @Entity classes found. Spring Boot risk score is Unscored; "
+            "routes and architecture diagrams still apply where detected.",
+        )
         result["diagrams"] = _make_diagrams({}, [], [], flow, classes)
         return _finish(result, java_files, root, parse_failures + incomplete, omitted)
 
@@ -1624,7 +1643,8 @@ def _unscored(root: str, commit: str, reason: str) -> dict:
         "entities": [],
         "relations": [],
         "endpoints": [],
-        "findings": [{"kind": "scope_gap", "file": "", "symbol": "", "detail": reason}],
+        # incomplete: does not affect score/risk (already Unscored)
+        "findings": [{"kind": "incomplete", "file": "", "symbol": "", "detail": reason}],
         "counts": {
             "scopeGaps": 0,
             "nPlusOne": 0,

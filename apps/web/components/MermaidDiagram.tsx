@@ -10,6 +10,19 @@ interface Props {
   onPick?: (name: string) => void;
 }
 
+/** Mermaid erDiagram: PK/FK/UK are key suffixes, never the type. Fix saved scans. */
+export function sanitizeErd(chart: string): string {
+  if (!chart.trimStart().startsWith("erDiagram")) return chart;
+  return chart
+    .split("\n")
+    .map((line) => {
+      const match = line.match(/^(\s+)(PK|FK|UK)\s+([A-Za-z_][A-Za-z0-9_]*)\s*$/i);
+      if (!match) return line;
+      return `${match[1]}string ${match[3]} ${match[2].toUpperCase()}`;
+    })
+    .join("\n");
+}
+
 function decodeFileBrackets(text: string): string {
   const hash = "\uFF03";
   return text
@@ -136,7 +149,7 @@ export default function MermaidDiagram({ chart, id, selectable, active, onPick }
 
       const container = ref.current!;
       container.innerHTML = "";
-      const drawable = chart
+      const drawable = sanitizeErd(chart)
         .split("\n")
         .filter((line) => !line.trimStart().startsWith("%%"))
         .join("\n");
@@ -152,10 +165,13 @@ export default function MermaidDiagram({ chart, id, selectable, active, onPick }
           svgEl.style.display = "block";
           svgEl.style.height = "auto";
           if (box && box.width > 0 && box.height > 0) {
-            svgEl.removeAttribute("width");
-            svgEl.removeAttribute("height");
-            svgEl.style.width = "100%";
-            svgEl.style.maxWidth = `${Math.ceil(box.width)}px`;
+            // Intrinsic pixel size so +/- zoom has a fixed base to scale.
+            // width:100% fights zoom — the SVG just reflows to the canvas.
+            svgEl.setAttribute("width", String(Math.ceil(box.width)));
+            svgEl.setAttribute("height", String(Math.ceil(box.height)));
+            svgEl.style.width = `${Math.ceil(box.width)}px`;
+            svgEl.style.maxWidth = "none";
+            svgEl.style.height = "auto";
           }
           if (!names.length) return;
           svgEl.querySelectorAll("g.node").forEach((node) => {

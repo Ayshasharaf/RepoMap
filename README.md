@@ -1,6 +1,8 @@
 # RepoMap
 
-Paste a public Spring Boot Java repository URL and get seven views of how it is built: Overview, Architecture, Data flow, Dependencies, Entry points, Critical paths, and Health.
+Paste a public GitHub repository URL and get eight views of how it is built: Overview, Architecture, Data flow, Endpoints, Dependencies, Entry points, Key paths, and Health.
+
+**Pitch:** architecture maps for any public repo when an AI key is set, plus Spring Boot structure (entities, endpoints, modules) when the repo is Java.
 
 ## How it works
 
@@ -26,6 +28,12 @@ GitHub URL  →  Python scanner (FastAPI)  →  JSON  →  Next.js dashboard
 ```bash
 cd scanner
 pip install -r requirements.txt
+```
+
+Optional smoke check:
+
+```bash
+python3 -m unittest test_smoke.py -v
 ```
 
 ### 2. Start the scanner
@@ -62,7 +70,7 @@ Paste any public Spring Boot Java GitHub URL, e.g.:
 https://github.com/spring-projects/spring-petclinic
 ```
 
-> **Note:** Endpoints, entities, findings, and the score are Spring Boot Java only. Other languages return an unscored result. The architecture diagram is drawn for any public repo when the scanner has an AI key.
+> **Note:** Architecture, overview, dependencies, and entry points work for any public repo (architecture needs an AI key). Spring Boot Java (`@Entity`) also fills entities and endpoints. Security findings stay in the scanner JSON for a later UI.
 
 ## Project structure
 
