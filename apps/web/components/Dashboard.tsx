@@ -5,13 +5,15 @@ import type { ScanResult, RepoMeta } from "@/lib/types";
 import type { FlowClass, FlowPath } from "@/lib/flow";
 import { compareScans, snapshotOf } from "@/lib/diff";
 import { parseFlow, parsePaths, parseStories } from "@/lib/flow";
-import MermaidDiagram from "./MermaidDiagram";
+import MermaidDiagram, { protectFlowLabels } from "./MermaidDiagram";
 
 const PHASE_LABEL: Record<string, string> = {
-  clone:    "Cloning repository…",
-  commit:   "Reading commit…",
-  scan:     "Scanning Java files…",
-  overview: "Building overview…",
+  clone:     "Cloning repository…",
+  commit:    "Reading commit…",
+  scan:      "Scanning Java files…",
+  overview:  "Building overview…",
+  structure: "Reading structure…",
+  diagram:   "Drawing architecture…",
 };
 
 async function readScanStream(
@@ -218,7 +220,7 @@ export default function Dashboard({ initialScans }: { initialScans: ScanResult[]
             <p>Map a public Spring Boot Java repository on GitHub. Then choose Overview, Architecture, Data flow, Endpoints, Dependencies, Entry points, Critical paths, or Health.</p>
             <p className="lang-note">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{display:"inline",verticalAlign:"-2px",marginRight:"5px"}}><circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/></svg>
-              Spring Boot Java only. Other languages will return an unscored result.
+              Endpoints, findings, and the score are Spring Boot Java only. The architecture diagram works for any public repository when the scanner has an AI key.
             </p>
             <form className="scan-form" onSubmit={handleScan}>
               <input
@@ -554,7 +556,7 @@ function diagramSource(chart: string, sourceUrl?: string, commit?: string) {
     if (line.trimStart().startsWith("%%")) continue;
     body.push(line);
   }
-  return [...body, ...clicks].join("\n").trim();
+  return protectFlowLabels([...body, ...clicks].join("\n").trim());
 }
 
 type DiagramView = "system" | "modules";
@@ -731,7 +733,7 @@ function Runbook({ scan }: { scan: ScanResult }) {
   const entries = scan.overview?.entryPoints ?? [];
   const steps = scan.overview?.checklist ?? [];
   if (!scan.overview) return <p className="summary">Map this repo again to see how it starts.</p>;
-  const starts = entries.filter((entry) => entry.detail.includes("Spring Boot application") || entry.name === "Docker");
+  const starts = entries.filter((entry) => entry.detail.includes("Spring Boot application") || entry.detail.includes("starts in") || entry.name === "Docker");
   const commands = steps.filter((step) => step.title !== "Set environment variables" && step.title !== "No setup file found");
   const run = commands.find((step) => step.title === "Run locally");
   const rest = commands.filter((step) => step !== run);
@@ -745,7 +747,7 @@ function Runbook({ scan }: { scan: ScanResult }) {
           <code>{run.detail}</code>
         </article>
       ) : (
-        <p className="summary">No run command was found in the Maven or Gradle files.</p>
+        <p className="summary">No run command was found in the build files or README.</p>
       )}
       <div className="starts">
         {starts.length === 0 && <p className="summary">No @SpringBootApplication class was found.</p>}
@@ -988,10 +990,11 @@ function DetailPanel({
     return () => { cancel = true; };
   }, [sourceUrl]);
 
-  const criticalPaths = paths.filter((path) => {
+  const matchedPaths = paths.filter((path) => {
     if (findingsForPath(path, scan.findings).length > 0) return true;
     return scan.endpoints.some((endpoint) => endpoint.scopeGap && endpoint.path && path.entry.includes(endpoint.path));
   });
+  const criticalPaths = matchedPaths.length > 0 ? matchedPaths : paths.slice(0, 1);
 
   const pageTitle: Record<Exclude<SectionId, "overview">, { title: string; hint: string }> = {
     modules:  { title: "Architecture",   hint: "The system as a diagram. Click a box to see the classes in it. Copy Mermaid if you want the source." },
@@ -999,7 +1002,7 @@ function DetailPanel({
     deps:     { title: "Dependencies",   hint: "Which group uses which, then the libraries in the build file." },
     endpoints:{ title: "Endpoints",      hint: "Every HTTP route this scan found. Filter by method, path, or entity." },
     entry:    { title: "Entry points",   hint: "If you want to run this, start here." },
-    critical: { title: "Critical paths", hint: "A route is listed when a finding names a class that route calls, or when that URL is marked as missing tenant scope." },
+    critical: { title: "Critical paths", hint: "The main request path. A route is also listed when a finding names a step on it, or when that URL is marked as missing tenant scope." },
     health:   { title: "Health",         hint: "Test files, CI workflows, and the latest commit from the clone. Stars and open issues from GitHub." },
   };
 
@@ -1048,10 +1051,10 @@ function DetailPanel({
                   <li className="is-risk"><b>Scope gap</b> A repository method returns a tenant-owned record without a tenant id, or the URL is marked as missing scope.</li>
                   <li className="is-risk"><b>Broken relation</b> An entity this route touches points at another entity in a way the fields do not match.</li>
                 </ul>
-                {criticalPaths.length > 0 ? (
+                {paths.length > 0 ? (
                   <FlowBoard paths={criticalPaths} classes={flowClasses} picked={picked} onPick={setPicked} findings={scan.findings} />
                 ) : (
-                  <p className="summary">{scan.findings.length === 0 ? "No findings on this repo, so no route is marked critical." : "Findings exist, but none of them name a class on a traced route."}</p>
+                  <p className="summary">Map this repo again. This result has no request path yet.</p>
                 )}
               </>
             )}

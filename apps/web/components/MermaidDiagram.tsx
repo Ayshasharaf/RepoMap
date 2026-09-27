@@ -10,6 +10,55 @@ interface Props {
   onPick?: (name: string) => void;
 }
 
+function decodeFileBrackets(text: string): string {
+  const hash = "\uFF03";
+  return text
+    .replace(new RegExp(`&#91;|&${hash}91;`, "g"), "[")
+    .replace(new RegExp(`&#93;|&${hash}93;`, "g"), "]");
+}
+
+/** Turn stored bracket codes back into [file.ext], and distinguish duplicate names. */
+export function protectFlowLabels(chart: string): string {
+  const lines = chart.split("\n").map((line) => {
+    const trimmed = line.trimStart();
+    if (
+      trimmed.startsWith("click ") ||
+      trimmed.startsWith("classDef ") ||
+      trimmed.startsWith("class ") ||
+      trimmed.startsWith("style ")
+    ) {
+      return line;
+    }
+    return line.replace(/"([^"\n]*)"/g, (_match, inner: string) => `"${decodeFileBrackets(inner)}"`);
+  });
+
+  const files = new Map<string, string>();
+  for (const line of lines) {
+    const match = line.trimStart().match(/^click\s+(\S+)\s+"[^"]*\/blob\/[^/]+\/([^"]+)"/);
+    if (match) files.set(match[1], match[2]);
+  }
+  const baseCount = new Map<string, number>();
+  for (const file of files.values()) {
+    const base = file.split("/").pop() || file;
+    baseCount.set(base, (baseCount.get(base) || 0) + 1);
+  }
+
+  return lines
+    .map((line) => {
+      const match = line.match(/^(\s*)(\w+)(\[")(.*?)("\])$/);
+      if (!match) return line;
+      const [, indent, id, open, inner, close] = match;
+      const file = files.get(id);
+      if (!file) return line;
+      const base = file.split("/").pop() || file;
+      if ((baseCount.get(base) || 0) < 2 || !inner.includes(`[${base}]`)) return line;
+      const parent = file.split("/").slice(-2, -1)[0] || "";
+      const caption = parent ? `${parent}/${base}` : base;
+      return `${indent}${id}${open}${inner.replace(`[${base}]`, `[${caption}]`)}${close}`;
+    })
+    .join("\n");
+}
+
 function matchNode(node: Element, names: string[]): string | null {
   const id = node.getAttribute("id") || "";
   const compact = (node.textContent || "").replace(/\s+/g, "");

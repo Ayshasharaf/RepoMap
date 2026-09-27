@@ -23,6 +23,11 @@ scans/
 .DS_Store
 Thumbs.db
 
+# Secrets
+.env
+.env.*
+!.env.example
+
 # Editor
 .vscode/
 .idea/

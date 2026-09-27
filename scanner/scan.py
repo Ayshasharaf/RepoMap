@@ -591,23 +591,6 @@ _LIBRARY_OUTBOUND = {
 }
 
 
-def _outbound_names(chains: list[list[str]], declared: set[str]) -> list[str]:
-    found = []
-    for chain in chains:
-        hit = None
-        for name in chain:
-            if name in _LIBRARY_OUTBOUND:
-                hit = name
-                break
-        if hit is None and chain:
-            simple = chain[-1]
-            if simple in declared or (simple.endswith("Client") and not simple.endswith("Repository")):
-                hit = simple
-        if hit and hit not in found:
-            found.append(hit)
-    return found
-
-
 def _choose_layer(options: list[str], entity: str | None, stem: str, repositories: dict) -> str | None:
     if not options:
         return None
@@ -1559,8 +1542,10 @@ def scan_directory(root: str, commit: str = "local", progress=None) -> dict:
     all_java = _collect_java_files(root)
 
     if not all_java:
+        from structure import apply_structure
         result = _unscored(root, commit, "No Java files found")
         result["scannedFiles"] = []
+        apply_structure(root, result)
         return result
 
     java_files, incomplete = _select_java_files(all_java, root)

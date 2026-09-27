@@ -1,5 +1,6 @@
 """Facts a new teammate needs, read from the cloned tree. No network, no timestamps."""
 
+import json
 import os
 import re
 import subprocess
@@ -48,6 +49,19 @@ _PURPOSE = (
     ("actuator", "Health"),
     ("lombok", "Boilerplate"),
     ("test", "Tests"),
+    ("express", "HTTP API"),
+    ("fastapi", "HTTP API"),
+    ("flask", "HTTP API"),
+    ("gin-gonic", "HTTP API"),
+    ("echo", "HTTP API"),
+    ("django", "HTTP API"),
+    ("axios", "HTTP client"),
+    ("sqlalchemy", "Database"),
+    ("prisma", "Database"),
+    ("mongoose", "Database"),
+    ("sqlite", "Database"),
+    ("postgres", "Database"),
+    ("redis", "Cache"),
 )
 
 
@@ -65,13 +79,15 @@ def build_overview(root: str, scan: dict, scanned_files: set[str] | None = None)
     entries = _entry_points(base, java_files)
     env_vars = _env_vars(base)
     checklist = _checklist(entries, env_vars)
-    test_files = [p for p in java_files if "/src/test/" in f"/{_rel(p, base)}"]
+    # Test files: Java tests + any language's test files
+    java_test_files = [p for p in java_files if "/src/test/" in f"/{_rel(p, base)}"]
+    test_count = _test_count_all(base) or len({str(p) for p in java_test_files})
     workflows = _ci_files(base)
     coverage = _coverage(base)
     return {
         "identity": {
             "why": _why(base),
-            "language": "Java" if java_files else "",
+            "language": _language(base, java_files),
             "stack": _stack(base, external),
             "license": _license(base),
             "commit": scan.get("commit") or "local",
@@ -85,7 +101,7 @@ def build_overview(root: str, scan: dict, scanned_files: set[str] | None = None)
         "entryPoints": entries,
         "checklist": checklist,
         "health": {
-            "testFiles": len({str(p) for p in test_files}),
+            "testFiles": test_count,
             "coverage": coverage,
             "workflows": workflows,
             "churn": _churn(base),
@@ -250,7 +266,76 @@ def _external_deps(root: Path) -> list[dict]:
             artifact = match[1]
             if artifact not in found:
                 found[artifact] = _purpose(artifact)
-    return [{"name": name, "usedFor": found[name]} for name in sorted(found)]
+    _manifest_deps(root, found)
+    return [{"name": name, "usedFor": found[name]} for name in sorted(found)][:80]
+
+
+def _remember_dep(found: dict[str, str], name: str, purpose: str | None = None) -> None:
+    clean = name.strip().split("/")[-1]
+    if not clean or clean.startswith("$") or clean in found or len(found) >= 80:
+        return
+    found[clean] = purpose or _purpose(clean)
+
+
+def _manifest_deps(root: Path, found: dict[str, str]) -> None:
+    for path in _named_files(root, {"package.json"}):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        for name in (data.get("dependencies") or {}):
+            _remember_dep(found, str(name))
+        for name in (data.get("devDependencies") or {}):
+            _remember_dep(found, str(name), "Development")
+    for path in _named_files(root, {"requirements.txt"}):
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            line = line.split("#", 1)[0].strip()
+            if not line or line.startswith("-"):
+                continue
+            name = re.split(r"[<>=\[]", line, maxsplit=1)[0].strip()
+            _remember_dep(found, name)
+    for path in _named_files(root, {"pyproject.toml"}):
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for name in re.findall(r"""['"]([A-Za-z0-9_.\-]+)[<>=\[][^'"]*['"]""", text):
+            _remember_dep(found, name)
+    for path in _named_files(root, {"Cargo.toml"}):
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for name in re.findall(r"^([A-Za-z0-9_-]+)\s*=\s*['\"]", text, flags=re.M):
+            if name not in {"name", "version", "edition", "authors"}:
+                _remember_dep(found, name)
+    for path in _named_files(root, {"go.mod"}):
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for module in re.findall(r"^\s+([A-Za-z0-9_.\-/]+)\s+v", text, flags=re.M):
+            _remember_dep(found, module)
+
+
+def _language(root: Path, java_files: list[Path]) -> str:
+    if java_files:
+        return "Java"
+    if _named_files(root, {"package.json"}):
+        return "JavaScript"
+    if _named_files(root, {"go.mod"}):
+        return "Go"
+    if _named_files(root, {"Cargo.toml"}):
+        return "Rust"
+    if _named_files(root, {"pyproject.toml", "requirements.txt"}):
+        return "Python"
+    return ""
 
 
 def _purpose(artifact: str) -> str:
@@ -273,6 +358,22 @@ def _stack(root: Path, external: list[dict]) -> list[str]:
     blob = _build_blob(root)
     if "spring-boot" in blob or any("spring-boot" in item["name"] for item in external):
         stack.append("Spring Boot")
+    # Detect popular non-Java frameworks by manifest presence
+    ext_names = {item["name"].lower() for item in external}
+    _FRAMEWORK_LABELS = [
+        ("fastapi", "FastAPI"), ("flask", "Flask"), ("django", "Django"),
+        ("express", "Express"), ("nextjs", "Next.js"), ("next", "Next.js"),
+        ("gin", "Gin"), ("echo", "Echo"), ("fiber", "Fiber"),
+        ("actix", "Actix"), ("axum", "Axum"),
+        ("rails", "Rails"), ("sinatra", "Sinatra"),
+        ("laravel", "Laravel"), ("symfony", "Symfony"),
+        ("nestjs", "NestJS"), ("nest", "NestJS"),
+        ("hono", "Hono"), ("fastify", "Fastify"),
+    ]
+    for token, label in _FRAMEWORK_LABELS:
+        if token in ext_names and label not in stack:
+            stack.append(label)
+            break
     for label in ("HTTP API", "Database", "Auth", "Queue", "Cache", "External API"):
         if any(item["usedFor"] == label for item in external) and label not in stack:
             stack.append(label)
@@ -314,6 +415,17 @@ def _license(root: Path) -> str:
     return ""
 
 
+def _root_json(root: Path, name: str) -> dict:
+    path = root / name
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def _entry_points(root: Path, java_files: list[Path]) -> list[dict]:
     entries = []
     for path in java_files:
@@ -344,6 +456,26 @@ def _entry_points(root: Path, java_files: list[Path]) -> list[dict]:
         entries.append({"name": "Tests", "detail": f"{mvn} test"})
     elif has_gradle:
         entries.append({"name": "Tests", "detail": f"{gradle} test"})
+    package = _root_json(root, "package.json")
+    scripts = package.get("scripts") if isinstance(package.get("scripts"), dict) else {}
+    if scripts.get("start"):
+        entries.append({"name": "Run locally", "detail": "npm start"})
+    elif scripts.get("dev"):
+        entries.append({"name": "Run locally", "detail": "npm run dev"})
+    if scripts.get("test"):
+        entries.append({"name": "Tests", "detail": "npm test"})
+    if (root / "go.mod").is_file():
+        entries.append({"name": "Run locally", "detail": "go run ."})
+        entries.append({"name": "Tests", "detail": "go test ./..."})
+    if (root / "Cargo.toml").is_file():
+        entries.append({"name": "Run locally", "detail": "cargo run"})
+        entries.append({"name": "Tests", "detail": "cargo test"})
+    if (root / "pyproject.toml").is_file() or (root / "requirements.txt").is_file():
+        for name in ("main.py", "app.py", "manage.py"):
+            if (root / name).is_file():
+                entries.append({"name": name, "detail": f"starts in · {name}"})
+                entries.append({"name": "Run locally", "detail": f"python {name}"})
+                break
     for command in _readme_commands(root):
         entries.append({"name": "From the README", "detail": command})
     return entries
@@ -361,7 +493,7 @@ def _readme_commands(root: Path) -> list[str]:
             command = line.strip().lstrip("$").strip()
             if not command or command.startswith("#"):
                 continue
-            if not re.match(r"(\./)?(mvnw|gradlew|mvn|gradle|docker|java)\b", command):
+            if not re.match(r"(\./)?(mvnw|gradlew|mvn|gradle|docker|java|npm|pnpm|yarn|python|python3|uvicorn|flask|go|cargo)\b", command):
                 continue
             if command in seen:
                 continue
@@ -410,7 +542,7 @@ def _checklist(entries: list[dict], env_vars: list[str]) -> list[dict]:
         if item["name"] == "From the README" and item["detail"] not in {run, test}:
             steps.append({"title": "From the README", "detail": item["detail"]})
     if not steps:
-        steps.append({"title": "No setup file found", "detail": "This clone has no Maven or Gradle build, Dockerfile, or env example."})
+        steps.append({"title": "No setup file found", "detail": "This clone has no build file, Dockerfile, or env example."})
     return steps
 
 
@@ -429,7 +561,49 @@ def _coverage(root: Path) -> str:
     for path in _named_files(root, {"pom.xml", "build.gradle", "build.gradle.kts"}):
         if "jacoco" in path.read_text(encoding="utf-8", errors="ignore").lower():
             return "JaCoCo is configured. A percentage is not in the clone."
+    # Non-Java coverage configs
+    for name in (".coveragerc", "setup.cfg", "pytest.ini"):
+        if (root / name).is_file():
+            try:
+                if "coverage" in (root / name).read_text(encoding="utf-8", errors="ignore").lower():
+                    return f"coverage config found in {name}."
+            except OSError:
+                pass
+    for path in root.rglob("codecov.yml"):
+        return "Codecov configured."
+    for path in root.rglob("*.toml"):
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            if "[tool.coverage" in text or "[coverage]" in text:
+                return f"coverage config found in {path.name}."
+        except OSError:
+            pass
     return ""
+
+
+def _test_count_all(root: Path) -> int:
+    """Count test files across all supported languages."""
+    count = 0
+    _TEST_SKIP = {
+        ".git", "node_modules", "dist", "build", "target", "vendor",
+        ".venv", "venv", "__pycache__", ".next", ".gradle", "out",
+    }
+    import os
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in _TEST_SKIP]
+        for name in filenames:
+            if (
+                name.startswith("test_")
+                or name.endswith("_test.py")
+                or name.endswith("_test.go")
+                or ".test." in name
+                or ".spec." in name
+                or name.endswith("Test.java")
+                or name.endswith("Spec.rb")
+                or name.endswith("_spec.rb")
+            ):
+                count += 1
+    return count
 
 
 def _rel(path: Path, root: Path) -> str:

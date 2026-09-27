@@ -8,7 +8,7 @@ Paste a public Spring Boot Java repository URL and get seven views of how it is 
 GitHub URL  →  Python scanner (FastAPI)  →  JSON  →  Next.js dashboard
 ```
 
-1. The **scanner** (`scanner/`) shallow-clones the repo, walks every `.java` file with `javalang`, and returns a single deterministic JSON describing entities, relations, endpoints, findings, diagrams, and an overview.
+1. The **scanner** (`scanner/`) shallow-clones the repo, walks every `.java` file with `javalang`, and returns JSON describing entities, relations, endpoints, findings, diagrams, and an overview. When `REPOMAP_AI_API_KEY` or `OPENAI_API_KEY` is set, it also asks that model for an architecture diagram of any language and keeps the chart only if every linked path exists in the clone.
 2. The **web app** (`apps/web/`) receives that JSON (streamed as NDJSON), renders it into seven sections, and writes it to `scans/` so it survives a page refresh.
 
 ## Requirements
@@ -62,7 +62,7 @@ Paste any public Spring Boot Java GitHub URL, e.g.:
 https://github.com/spring-projects/spring-petclinic
 ```
 
-> **Note:** Only Spring Boot Java repos are supported. Other languages return an unscored result.
+> **Note:** Endpoints, entities, findings, and the score are Spring Boot Java only. Other languages return an unscored result. The architecture diagram is drawn for any public repo when the scanner has an AI key.
 
 ## Project structure
 
@@ -91,8 +91,11 @@ https://github.com/spring-projects/spring-petclinic
 | `SCANNER_URL` | `http://localhost:8000` | URL of the running scanner process |
 | `GITHUB_TOKEN` | *(none)* | Optional GitHub PAT for the web app. Sent as `Authorization: Bearer` on repo-meta requests. Without it, GitHub caps those calls at 60/hour per IP. |
 | `REPOMAP_MAX_JAVA_FILES` | `2500` | Scanner cap. Repos above it are scanned module by module instead of being returned unscored. Set this on the scanner process. |
+| `REPOMAP_AI_API_KEY` | *(none)* | Scanner key for architecture. With a Groq key (`gsk_…`), every map goes through Groq. Without a key, the static file-tree chart is kept. |
+| `REPOMAP_AI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible chat endpoint. Use `https://api.groq.com/openai/v1` for Groq. |
+| `REPOMAP_AI_MODEL` | `gpt-4o-mini` | Model name sent with the diagram request. On Groq, with no model set, the scanner uses `openai/gpt-oss-120b`. |
 
-Set `SCANNER_URL` and `GITHUB_TOKEN` in `apps/web/.env.local`. Set `REPOMAP_MAX_JAVA_FILES` in the scanner's environment.
+Set `SCANNER_URL` and `GITHUB_TOKEN` in `apps/web/.env.local`. For the architecture diagram, paste a Groq key into `scanner/.env` (`REPOMAP_AI_API_KEY`). The scanner reads that file on the next map. `REPOMAP_MAX_JAVA_FILES` can go in the same file.
 
 ## Scan persistence
 

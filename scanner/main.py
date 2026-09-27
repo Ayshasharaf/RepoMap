@@ -19,8 +19,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from diagram_ai import apply_architecture
 from overview import build_overview
 from scan import scan_directory
+from structure import apply_structure
 
 # Resolved once at startup: two levels up from scanner/ is the repo root.
 _SCANS_DIR = Path(__file__).resolve().parent.parent / "scans"
@@ -84,6 +86,12 @@ def _clone_and_scan(clean_url: str, repo_slug: str, progress=None, page_url: str
         scanned = data.pop("scannedFiles", None)
         scanned_files = None if scanned is None else set(scanned)
         data["overview"] = build_overview(tmp_dir, data, scanned_files)
+        if progress:
+            progress({"type": "status", "phase": "structure", "file": "", "index": 0, "total": 0})
+        apply_structure(tmp_dir, data)
+        if progress:
+            progress({"type": "status", "phase": "diagram", "file": "", "index": 0, "total": 0})
+        apply_architecture(tmp_dir, data)
         data["service"] = repo_slug
         if page_url:
             data["source"] = page_url
