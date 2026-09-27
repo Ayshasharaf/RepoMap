@@ -79,7 +79,7 @@ const PREVIEWS = [
   },
   {
     label: "Endpoints",
-    hint: "Every HTTP route found — filter by method, path, or entity.",
+    hint: "Every HTTP route found. Filter by method, path, or entity.",
     sketch: "table" as const,
   },
   {
@@ -262,7 +262,7 @@ export default function Dashboard({ initialScans }: { initialScans: ScanResult[]
             <h1>See how a repo is built.</h1>
             <p>
               Paste a public GitHub URL. RepoMap maps architecture, data flow, endpoints,
-              dependencies, and entry points — with deeper entity and route detail for Spring Boot.
+              dependencies, and entry points, with deeper entity and route detail for Spring Boot.
             </p>
             <form className="scan-form" onSubmit={handleScan}>
               <input
@@ -294,7 +294,7 @@ export default function Dashboard({ initialScans }: { initialScans: ScanResult[]
           <p className="section-kicker">What you get</p>
           <h2>Eight views of the same codebase.</h2>
           <p className="previews-lede">
-            Each view answers a different question — from “what is this?” to “how do I run it?”
+            Each view answers a different question, from “what is this?” to “how do I run it?”
           </p>
           <div className="preview-rail" role="list">
             {PREVIEWS.map((item, index) => (
@@ -794,12 +794,14 @@ function ArchBoard({
   const [copied, setCopied] = useState(false);
   const canvasRef = useRef<HTMLDivElement>(null);
   const zoomInnerRef = useRef<HTMLDivElement>(null);
+  const pendingFit = useRef(true);
   const [natural, setNatural] = useState({ w: 0, h: 0 });
 
   useEffect(() => {
     setView(systemChart ? "system" : "modules");
     setPicked(null);
-    setZoom(1);
+    pendingFit.current = true;
+    setNatural({ w: 0, h: 0 });
   }, [service, commit, systemChart, modulesChart]);
 
   const activeChart = view === "system" && systemChart ? systemChart : modulesChart;
@@ -812,20 +814,35 @@ function ArchBoard({
     ? `${sourceUrl.replace(/\.git$/, "")}/blob/${commit}/${pickedClass.file}`
     : "";
 
+  function computeFitZoom(width: number) {
+    const canvas = canvasRef.current;
+    if (!canvas || width <= 0) return 1;
+    const available = Math.max(120, canvas.clientWidth - 40);
+    return Math.min(1.5, Math.max(0.35, Math.round((available / width) * 100) / 100));
+  }
+
   // Measure the unscaled diagram so transform:scale can expand the scroll area.
   useEffect(() => {
     const inner = zoomInnerRef.current;
     if (!inner) return;
+    pendingFit.current = true;
     const measure = () => {
       const svg = inner.querySelector("svg");
+      let w = 0;
+      let h = 0;
       if (svg) {
         const box = svg.viewBox?.baseVal;
-        const w = box?.width || svg.clientWidth || inner.scrollWidth;
-        const h = box?.height || svg.clientHeight || inner.scrollHeight;
-        setNatural({ w: Math.ceil(w), h: Math.ceil(h) });
-        return;
+        w = Math.ceil(box?.width || svg.clientWidth || inner.scrollWidth);
+        h = Math.ceil(box?.height || svg.clientHeight || inner.scrollHeight);
+      } else {
+        w = inner.scrollWidth;
+        h = inner.scrollHeight;
       }
-      setNatural({ w: inner.scrollWidth, h: inner.scrollHeight });
+      setNatural({ w, h });
+      if (pendingFit.current && w > 0) {
+        setZoom(computeFitZoom(w));
+        pendingFit.current = false;
+      }
     };
     measure();
     const timer = window.setInterval(measure, 200);
@@ -840,14 +857,12 @@ function ArchBoard({
   }, [activeChart, view, service]);
 
   function fitToCanvas() {
-    const canvas = canvasRef.current;
-    if (!canvas || natural.w <= 0) {
+    if (natural.w <= 0) {
+      pendingFit.current = true;
       setZoom(1);
       return;
     }
-    const available = Math.max(120, canvas.clientWidth - 40);
-    const next = Math.min(1.5, Math.max(0.35, available / natural.w));
-    setZoom(Math.round(next * 100) / 100);
+    setZoom(computeFitZoom(natural.w));
   }
 
   async function copyMermaid() {
@@ -867,12 +882,12 @@ function ArchBoard({
           <div className="diagram-toolbar">
             <div className="method-filters" role="group" aria-label="Diagram">
               {systemChart && (
-                <button type="button" className={view === "system" ? "is-on" : ""} onClick={() => { setView("system"); setPicked(null); setZoom(1); }}>
+                <button type="button" className={view === "system" ? "is-on" : ""} onClick={() => { setView("system"); setPicked(null); pendingFit.current = true; }}>
                   System
                 </button>
               )}
               {modulesChart && (
-                <button type="button" className={view === "modules" ? "is-on" : ""} onClick={() => { setView("modules"); setPicked(null); setZoom(1); }}>
+                <button type="button" className={view === "modules" ? "is-on" : ""} onClick={() => { setView("modules"); setPicked(null); pendingFit.current = true; }}>
                   Modules
                 </button>
               )}
@@ -1381,7 +1396,7 @@ function DetailPanel({
     flow:     { title: "Data flow",      hint: "Pick a route and a diagram type. Call chain shows numbered steps. Sequence shows actor messages. Transaction shows DB scope." },
     deps:     { title: "Dependencies",   hint: "Which group uses which, then the libraries in the build file." },
     endpoints:{ title: "Endpoints",      hint: "Every HTTP route this scan found. Filter by method, path, or entity." },
-    entry:    { title: "Entry points",   hint: "How to run this repo — commands and process starts detected from build files, Docker, and the README." },
+    entry:    { title: "Entry points",   hint: "How to run this repo. Commands and process starts detected from build files, Docker, and the README." },
     key:      { title: "Key paths",      hint: "Request paths that reach persistence or storage. Click a step to see its methods." },
     health:   { title: "Health",         hint: "Test files, CI workflows, and the latest commit from the clone. Stars and open issues from GitHub." },
   };

@@ -8,7 +8,7 @@ const mono = IBM_Plex_Mono({ subsets: ["latin"], weight: ["400", "500"], variabl
 
 export const metadata: Metadata = {
   title: "RepoMap",
-  description: "Spring Boot scanner",
+  description: "Architecture maps for any public repo. Deepest detail for Java / Spring Boot.",
 };
 
 export default function RootLayout({
