@@ -134,6 +134,30 @@ export default function Dashboard({ initialScans }: { initialScans: ScanResult[]
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSidebarOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = previous;
+    };
+  }, [sidebarOpen]);
+
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 901px)");
+    const closeOnDesktop = () => {
+      if (mq.matches) setSidebarOpen(false);
+    };
+    closeOnDesktop();
+    mq.addEventListener("change", closeOnDesktop);
+    return () => mq.removeEventListener("change", closeOnDesktop);
+  }, []);
+
   function sourceFor(scan: ScanResult) {
     return sources[scan.service] || scan.source || "";
   }
@@ -292,89 +316,122 @@ export default function Dashboard({ initialScans }: { initialScans: ScanResult[]
 
   return (
     <div className="app-shell">
-      {/* Mobile overlay */}
-      {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} aria-hidden="true" />}
+      {sidebarOpen && (
+        <button
+          type="button"
+          className="sidebar-overlay"
+          aria-label="Close navigation"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
 
-      {/* Sidebar */}
-      <aside className={`sidebar${sidebarOpen ? " is-open" : ""}`} aria-label="Navigation">
+      <aside
+        className={`sidebar${sidebarOpen ? " is-open" : ""}`}
+        aria-label="Navigation"
+        id="app-sidebar"
+      >
         <div className="sidebar-top">
           <div className="sidebar-brand">
-            <span className="brand-mark" aria-hidden="true">RM</span>
-            <span>RepoMap</span>
+            <div className="sidebar-brand-main">
+              <span className="brand-mark" aria-hidden="true">RM</span>
+              <div className="sidebar-brand-copy">
+                <span className="sidebar-brand-name">RepoMap</span>
+                <span className="sidebar-brand-tag">Codebase map</span>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="sidebar-close"
+              aria-label="Close navigation"
+              onClick={() => setSidebarOpen(false)}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M18 6L6 18M6 6l12 12" />
+              </svg>
+            </button>
           </div>
 
-          {/* Repo switcher */}
-          <div className="sidebar-repos">
-            {scans.map((scan) => {
-              const source = sourceFor(scan);
-              const isScanning = loading && scanningService === scan.service;
-              return (
-                <div
-                  key={scan.service}
-                  className={`sidebar-repo${selected.service === scan.service ? " is-on" : ""}${isScanning ? " is-scanning" : ""}`}
-                >
-                  <button
-                    type="button"
-                    className="sidebar-repo-open"
-                    onClick={() => { setSelected(scan); setSection("overview"); setSidebarOpen(false); }}
-                    title={scan.service}
+          <div className="sidebar-section">
+            <p className="sidebar-section-label">Repos</p>
+            <div className="sidebar-repos">
+              {scans.map((scan) => {
+                const source = sourceFor(scan);
+                const isScanning = loading && scanningService === scan.service;
+                return (
+                  <div
+                    key={scan.service}
+                    className={`sidebar-repo${selected.service === scan.service ? " is-on" : ""}${isScanning ? " is-scanning" : ""}`}
                   >
-                    <span className="sidebar-repo-dot" />
-                    <span className="sidebar-repo-name">{scan.service}</span>
-                    {isScanning ? (
-                      <span className="sidebar-repo-phase">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="spin-icon" aria-hidden="true"><path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0" /></svg>
-                        {phase || "Mapping…"}
+                    <button
+                      type="button"
+                      className="sidebar-repo-open"
+                      onClick={() => { setSelected(scan); setSection("overview"); setSidebarOpen(false); }}
+                      title={scan.service}
+                    >
+                      <span className="sidebar-repo-dot" />
+                      <span className="sidebar-repo-text">
+                        <span className="sidebar-repo-name">{scan.service}</span>
+                        {isScanning ? (
+                          <span className="sidebar-repo-phase">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="spin-icon" aria-hidden="true"><path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0" /></svg>
+                            {phase || "Mapping…"}
+                          </span>
+                        ) : null}
                       </span>
-                    ) : null}
-                  </button>
-                  <span className="sidebar-repo-actions">
-                    <button
-                      type="button"
-                      className="sidebar-repo-action"
-                      aria-label={`Scan ${scan.service} again`}
-                      title={source ? "Scan again" : "No GitHub URL saved for this scan"}
-                      disabled={loading || !source}
-                      onClick={() => { void runScan(source); }}
-                    >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 00-9-9 9.75 9.75 0 00-6.74 2.74L3 8" /><path d="M3 3v5h5" /><path d="M3 12a9 9 0 009 9 9.75 9.75 0 006.74-2.74L21 16" /><path d="M16 16h5v5" /></svg>
                     </button>
-                    <button
-                      type="button"
-                      className="sidebar-repo-action"
-                      aria-label={`Remove ${scan.service}`}
-                      title="Remove scan"
-                      disabled={loading}
-                      onClick={() => { void removeScan(scan.service); }}
-                    >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14H6L5 6" /></svg>
-                    </button>
-                  </span>
-                </div>
-              );
-            })}
+                    <span className="sidebar-repo-actions">
+                      <button
+                        type="button"
+                        className="sidebar-repo-action"
+                        aria-label={`Scan ${scan.service} again`}
+                        title={source ? "Scan again" : "No GitHub URL saved for this scan"}
+                        disabled={loading || !source}
+                        onClick={() => { void runScan(source); }}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 00-9-9 9.75 9.75 0 00-6.74 2.74L3 8" /><path d="M3 3v5h5" /><path d="M3 12a9 9 0 009 9 9.75 9.75 0 006.74-2.74L21 16" /><path d="M16 16h5v5" /></svg>
+                      </button>
+                      <button
+                        type="button"
+                        className="sidebar-repo-action"
+                        aria-label={`Remove ${scan.service}`}
+                        title="Remove scan"
+                        disabled={loading}
+                        onClick={() => { void removeScan(scan.service); }}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14H6L5 6" /></svg>
+                      </button>
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
 
-          {/* Nav */}
-          <nav className="sidebar-nav" aria-label="Sections">
-            {NAV.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                className={`sidebar-nav-item${section === item.id ? " is-on" : ""}`}
-                aria-current={section === item.id ? "page" : undefined}
-                onClick={() => { setSection(item.id); setSidebarOpen(false); }}
-                title={item.hint}
-              >
-                <NavIcon path={item.icon} />
-                <span>{item.label}</span>
-              </button>
-            ))}
-          </nav>
+          <div className="sidebar-section sidebar-section-nav">
+            <p className="sidebar-section-label">Views</p>
+            <nav className="sidebar-nav" aria-label="Sections">
+              {NAV.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={`sidebar-nav-item${section === item.id ? " is-on" : ""}`}
+                  aria-current={section === item.id ? "page" : undefined}
+                  onClick={() => { setSection(item.id); setSidebarOpen(false); }}
+                  title={item.hint}
+                >
+                  <NavIcon path={item.icon} />
+                  <span className="sidebar-nav-copy">
+                    <span className="sidebar-nav-label">{item.label}</span>
+                    <span className="sidebar-nav-hint">{item.hint}</span>
+                  </span>
+                </button>
+              ))}
+            </nav>
+          </div>
         </div>
 
-        {/* Scan form at bottom of sidebar */}
         <div className="sidebar-scan">
+          <p className="sidebar-section-label">Map another</p>
           <form onSubmit={handleScan}>
             <input
               ref={inputRef}
@@ -405,17 +462,24 @@ export default function Dashboard({ initialScans }: { initialScans: ScanResult[]
         </div>
       </aside>
 
-      {/* Main content */}
       <div className="main-area">
-        {/* Top bar (mobile) */}
         <header className="topbar">
-          <button className="topbar-menu" type="button" onClick={() => setSidebarOpen(true)} aria-label="Open navigation">
+          <button
+            className="topbar-menu"
+            type="button"
+            onClick={() => setSidebarOpen(true)}
+            aria-label="Open navigation"
+            aria-expanded={sidebarOpen}
+            aria-controls="app-sidebar"
+          >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M4 6h16M4 12h16M4 18h16" />
             </svg>
           </button>
-          <div className="topbar-title">{selected.service}</div>
-          <div className="topbar-section">{NAV.find(n => n.id === section)?.label}</div>
+          <div className="topbar-copy">
+            <div className="topbar-title">{selected.service}</div>
+            <div className="topbar-section">{NAV.find(n => n.id === section)?.label}</div>
+          </div>
         </header>
 
         <div className="main-canvas">
