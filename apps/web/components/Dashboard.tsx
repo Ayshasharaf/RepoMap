@@ -46,7 +46,13 @@ async function readScanStream(
 }
 
 function kindLabel(kind: string) {
-  return { scope_gap: "Scope gap", n_plus_one: "N+1", broken_relation: "Broken relation" }[kind] ?? kind;
+  return {
+    scope_gap: "Scope gap",
+    n_plus_one: "N+1",
+    broken_relation: "Broken relation",
+    parse_error: "Parse error",
+    incomplete: "Not scanned",
+  }[kind] ?? kind;
 }
 
 type SectionId = "overview" | "modules" | "flow" | "deps" | "entry" | "critical" | "health";
@@ -68,7 +74,7 @@ const PREVIEWS = [
   { label: "Dependencies",   hint: "Libraries on shelves, named by what they are for.",                      sketch: "shelves" },
   { label: "Entry points",   hint: "The class that starts it, and the command that runs it.",                 sketch: "term" },
   { label: "Critical paths", hint: "Only the routes that sit next to a finding.",                            sketch: "risk" },
-  { label: "Health",         hint: "Tests, CI, stars, and what this clone cannot know.",                     sketch: "signals" },
+  { label: "Health",         hint: "Tests, CI, stars, and how big the latest commit is.",                    sketch: "signals" },
 ] as const;
 
 const MODULE_LABEL: Record<string, string> = {
@@ -119,14 +125,23 @@ export default function Dashboard({ initialScans }: { initialScans: ScanResult[]
   const [loading, setLoading] = useState(false);
   const [phase, setPhase] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
-  const [sources, setSources] = useState<Record<string, string>>({});
+  const [sources, setSources] = useState<Record<string, string>>(() => {
+    const saved: Record<string, string> = {};
+    for (const scan of initialScans) {
+      if (scan.source) saved[scan.service] = scan.source;
+    }
+    return saved;
+  });
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  async function handleScan(e: React.FormEvent) {
-    e.preventDefault();
-    const trimmed = url.trim();
-    if (!trimmed) return;
+  function sourceFor(scan: ScanResult) {
+    return sources[scan.service] || scan.source || "";
+  }
+
+  async function runScan(rawUrl: string) {
+    const trimmed = rawUrl.trim();
+    if (!trimmed || loading) return;
     setLoading(true);
     setPhase("Cloning repository…");
     setError(null);
@@ -145,8 +160,9 @@ export default function Dashboard({ initialScans }: { initialScans: ScanResult[]
       const result = contentType.includes("ndjson")
         ? await readScanStream(res, setPhase)
         : (await res.json()) as ScanResult;
+      const savedUrl = result.source || trimmed;
       setScans((prev) => [result, ...prev.filter((s) => s.service !== result.service)]);
-      setSources((prev) => ({ ...prev, [result.service]: trimmed }));
+      setSources((prev) => ({ ...prev, [result.service]: savedUrl }));
       setSelected(result);
       setSection("overview");
       setUrl("");
@@ -156,6 +172,35 @@ export default function Dashboard({ initialScans }: { initialScans: ScanResult[]
       setLoading(false);
       setPhase("");
     }
+  }
+
+  function handleScan(e: React.FormEvent) {
+    e.preventDefault();
+    void runScan(url);
+  }
+
+  async function removeScan(service: string) {
+    if (loading) return;
+    let res: Response;
+    try {
+      res = await fetch(`/scans?service=${encodeURIComponent(service)}`, { method: "DELETE" });
+    } catch {
+      setError("Could not remove that scan.");
+      return;
+    }
+    if (!res.ok) {
+      setError("Could not remove that scan.");
+      return;
+    }
+    setError(null);
+    const rest = scans.filter((scan) => scan.service !== service);
+    setScans(rest);
+    setSelected((current) => (current?.service === service ? rest[0] ?? null : current));
+    setSources((prev) => {
+      const next = { ...prev };
+      delete next[service];
+      return next;
+    });
   }
 
   if (!selected) {
@@ -232,20 +277,49 @@ export default function Dashboard({ initialScans }: { initialScans: ScanResult[]
 
           {/* Repo switcher */}
           <div className="sidebar-repos">
-            {scans.map((scan) => (
-              <button
-                key={scan.service}
-                type="button"
-                className={`sidebar-repo${selected.service === scan.service ? " is-on" : ""}`}
-                onClick={() => { setSelected(scan); setSection("overview"); setSidebarOpen(false); }}
-                title={scan.service}
-              >
-                <span className="sidebar-repo-dot" />
-                <span className="sidebar-repo-name">{scan.service}</span>
-                {scan.counts.risk === "High" && <span className="sidebar-badge sidebar-badge-risk">!</span>}
-                {scan.counts.risk === "Medium" && <span className="sidebar-badge sidebar-badge-warn">~</span>}
-              </button>
-            ))}
+            {scans.map((scan) => {
+              const source = sourceFor(scan);
+              return (
+                <div
+                  key={scan.service}
+                  className={`sidebar-repo${selected.service === scan.service ? " is-on" : ""}`}
+                >
+                  <button
+                    type="button"
+                    className="sidebar-repo-open"
+                    onClick={() => { setSelected(scan); setSection("overview"); setSidebarOpen(false); }}
+                    title={scan.service}
+                  >
+                    <span className="sidebar-repo-dot" />
+                    <span className="sidebar-repo-name">{scan.service}</span>
+                    {scan.counts.risk === "High" && <span className="sidebar-badge sidebar-badge-risk">!</span>}
+                    {scan.counts.risk === "Medium" && <span className="sidebar-badge sidebar-badge-warn">~</span>}
+                  </button>
+                  <span className="sidebar-repo-actions">
+                    <button
+                      type="button"
+                      className="sidebar-repo-action"
+                      aria-label={`Scan ${scan.service} again`}
+                      title={source ? "Scan again" : "No GitHub URL saved for this scan"}
+                      disabled={loading || !source}
+                      onClick={() => { void runScan(source); }}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 00-9-9 9.75 9.75 0 00-6.74 2.74L3 8" /><path d="M3 3v5h5" /><path d="M3 12a9 9 0 009 9 9.75 9.75 0 006.74-2.74L21 16" /><path d="M16 16h5v5" /></svg>
+                    </button>
+                    <button
+                      type="button"
+                      className="sidebar-repo-action"
+                      aria-label={`Remove ${scan.service}`}
+                      title="Remove scan"
+                      disabled={loading}
+                      onClick={() => { void removeScan(scan.service); }}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14H6L5 6" /></svg>
+                    </button>
+                  </span>
+                </div>
+              );
+            })}
           </div>
 
           {/* Nav */}
@@ -308,7 +382,7 @@ export default function Dashboard({ initialScans }: { initialScans: ScanResult[]
         <div className="main-canvas">
           <DetailPanel
             scan={selected}
-            sourceUrl={sources[selected.service]}
+            sourceUrl={sourceFor(selected)}
             section={section}
             onNavigate={setSection}
           />
@@ -738,8 +812,8 @@ function HealthBoard({ scan, meta }: { scan: ScanResult; meta: RepoMeta | null }
     },
     {
       name: "Churn",
-      state: "unknown",
-      detail: health?.churn || "Only the latest commit is cloned, so the files that change most often are not in this scan.",
+      state: health?.churn ? "ok" : "unknown",
+      detail: health?.churn || "No commit diff in this clone.",
     },
   ];
   return (
@@ -920,7 +994,7 @@ function DetailPanel({
     deps:     { title: "Dependencies",   hint: "Which group uses which, then the libraries in the build file." },
     entry:    { title: "Entry points",   hint: "If you want to run this, start here." },
     critical: { title: "Critical paths", hint: "A route is listed when a finding names a class that route calls, or when that URL is marked as missing tenant scope." },
-    health:   { title: "Health",         hint: "Test files and CI workflows from the repo. Stars and open issues from GitHub." },
+    health:   { title: "Health",         hint: "Test files, CI workflows, and the latest commit from the clone. Stars and open issues from GitHub." },
   };
 
   return (

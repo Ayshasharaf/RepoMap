@@ -89,10 +89,11 @@ https://github.com/spring-projects/spring-petclinic
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SCANNER_URL` | `http://localhost:8000` | URL of the running scanner process |
-| `GITHUB_TOKEN` | *(none)* | Optional GitHub PAT — raises the repo-meta API rate limit from 60 to 5 000 req/hr |
+| `GITHUB_TOKEN` | *(none)* | Optional GitHub PAT for the web app. Sent as `Authorization: Bearer` on repo-meta requests. Without it, GitHub caps those calls at 60/hour per IP. |
+| `REPOMAP_MAX_JAVA_FILES` | `2500` | Scanner cap. Repos above it are scanned module by module instead of being returned unscored. Set this on the scanner process. |
 
-Set these in `apps/web/.env.local`.
+Set `SCANNER_URL` and `GITHUB_TOKEN` in `apps/web/.env.local`. Set `REPOMAP_MAX_JAVA_FILES` in the scanner's environment.
 
 ## Scan persistence
 
-Every successful scan is written to `scans/<repo>.json` by the scanner. The Next.js app reads all files in `scans/` on startup (`lib/readScans.ts`), so previously scanned repos are available immediately after a restart without re-scanning.
+Every successful scan is written to `scans/<repo>.json` by the scanner. The Next.js app reads all files in `scans/` on startup (`lib/readScans.ts`), so previously scanned repos are available immediately after a restart without re-scanning. The sidebar can scan a repo again or remove it, which deletes that file.

@@ -2,10 +2,13 @@
 
 import os
 import re
+import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import javalang
+
+from scan import merge_findings, parse_failure_finding
 
 _LAYER_SUFFIXES = (
     ("Controller", "api", "API"),
@@ -48,12 +51,16 @@ _PURPOSE = (
 )
 
 
-def build_overview(root: str, scan: dict) -> dict:
+def build_overview(root: str, scan: dict, scanned_files: set[str] | None = None) -> dict:
     base = Path(root)
     java_files = sorted(p for p in base.rglob("*.java") if "node_modules" not in p.parts)
+    if scanned_files is not None:
+        java_files = [path for path in java_files if _rel(path, base) in scanned_files]
     entity_names = {item.get("name") for item in scan.get("entities") or [] if item.get("name")}
     modules, class_module = _modules(java_files, base, entity_names)
-    edges = _import_edges(java_files, base, class_module)
+    edges, parse_errors = _import_edges(java_files, base, class_module)
+    if parse_errors:
+        scan["findings"] = merge_findings(list(scan.get("findings") or []), parse_errors)
     external = _external_deps(base)
     entries = _entry_points(base, java_files)
     env_vars = _env_vars(base)
@@ -81,7 +88,7 @@ def build_overview(root: str, scan: dict) -> dict:
             "testFiles": len({str(p) for p in test_files}),
             "coverage": coverage,
             "workflows": workflows,
-            "churn": "Only the latest commit is cloned, so the files that change most often are not in this scan.",
+            "churn": _churn(base),
         },
     }
 
@@ -116,9 +123,39 @@ def _layer(class_name: str, rel: str) -> tuple[str, str]:
     return "app", "Application"
 
 
-def _import_edges(java_files: list[Path], root: Path, class_module: dict[str, str]) -> list[dict]:
+_SHORTSTAT = re.compile(
+    r"(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?"
+)
+
+
+def _churn(root: Path) -> str:
+    """Line stats for the one commit a shallow clone actually has."""
+    try:
+        result = subprocess.run(
+            ["git", "show", "-1", "--shortstat", "--format=", "HEAD"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if result.returncode != 0:
+        return ""
+    match = _SHORTSTAT.search(result.stdout)
+    if not match:
+        return ""
+    files = int(match.group(1))
+    added = int(match.group(2) or 0)
+    deleted = int(match.group(3) or 0)
+    file_word = "file" if files == 1 else "files"
+    return f"Latest commit changes {files} {file_word}, +{added} / -{deleted} lines."
+
+
+def _import_edges(java_files: list[Path], root: Path, class_module: dict[str, str]) -> tuple[list[dict], list[dict]]:
     seen = set()
     edges = []
+    parse_errors = []
     for path in java_files:
         rel = _rel(path, root)
         if rel.startswith("src/test/"):
@@ -128,7 +165,8 @@ def _import_edges(java_files: list[Path], root: Path, class_module: dict[str, st
             continue
         try:
             tree = javalang.parse.parse(path.read_text(encoding="utf-8", errors="ignore"))
-        except Exception:
+        except Exception as exc:
+            parse_errors.append(parse_failure_finding(path, str(root), exc))
             continue
         names = []
         for imp in tree.imports or []:
@@ -146,7 +184,7 @@ def _import_edges(java_files: list[Path], root: Path, class_module: dict[str, st
             seen.add(pair)
             edges.append({"from": source, "to": target})
     edges.sort(key=lambda item: (item["from"], item["to"]))
-    return edges
+    return edges, parse_errors
 
 
 def _module_diagram(modules: list[dict], edges: list[dict]) -> str:

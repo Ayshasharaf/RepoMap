@@ -47,7 +47,7 @@ def _prepare(url: str) -> tuple[str, str, str]:
     return f"https://github.com/{slug}.git", slug.split("/")[-1], slug
 
 
-def _clone_and_scan(clean_url: str, repo_slug: str, progress=None) -> dict:
+def _clone_and_scan(clean_url: str, repo_slug: str, progress=None, page_url: str = "") -> dict:
     tmp_dir = tempfile.mkdtemp()
     try:
         try:
@@ -81,8 +81,12 @@ def _clone_and_scan(clean_url: str, repo_slug: str, progress=None) -> dict:
         data = scan_directory(tmp_dir, commit, progress=progress)
         if progress:
             progress({"type": "status", "phase": "overview", "file": "", "index": 0, "total": 0})
-        data["overview"] = build_overview(tmp_dir, data)
+        scanned = data.pop("scannedFiles", None)
+        scanned_files = None if scanned is None else set(scanned)
+        data["overview"] = build_overview(tmp_dir, data, scanned_files)
         data["service"] = repo_slug
+        if page_url:
+            data["source"] = page_url
         return data
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -104,8 +108,8 @@ def _persist(data: dict) -> None:
 
 @app.post("/scan-github")
 def scan_github(req: ScanRequest):
-    clean_url, repo_slug, _repo = _prepare(req.url)
-    data = _clone_and_scan(clean_url, repo_slug)
+    clean_url, repo_slug, slug = _prepare(req.url)
+    data = _clone_and_scan(clean_url, repo_slug, page_url=f"https://github.com/{slug}")
     _persist(data)
     return json.loads(json.dumps(data, sort_keys=True, indent=2))
 
@@ -113,6 +117,7 @@ def scan_github(req: ScanRequest):
 @app.post("/scan-github/stream")
 def scan_github_stream(req: ScanRequest):
     clean_url, repo_slug, repo = _prepare(req.url)
+    page_url = f"https://github.com/{repo}"
 
     def generate():
         events: queue.Queue = queue.Queue()
@@ -125,7 +130,7 @@ def scan_github_stream(req: ScanRequest):
             try:
                 progress({"type": "status", "phase": "clone", "file": "", "index": 0, "total": 0})
                 try:
-                    data = _clone_and_scan(clean_url, repo_slug, progress=progress)
+                    data = _clone_and_scan(clean_url, repo_slug, progress=progress, page_url=page_url)
                 except HTTPException as exc:
                     detail = exc.detail if isinstance(exc.detail, str) else "Scan failed"
                     events.put({"type": "error", "detail": detail})

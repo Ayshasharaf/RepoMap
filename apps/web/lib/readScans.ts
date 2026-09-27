@@ -2,12 +2,17 @@ import fs from "fs";
 import path from "path";
 import type { ScanResult } from "./types";
 
+/** `scans/` at the workspace root. Next runs with cwd `apps/web`. */
+export function scansDirectory(): string {
+  return path.resolve(process.cwd(), "../../scans");
+}
+
 /**
  * Reads every *.json file from the `scans/` directory at the workspace root.
  * Returns an empty array when the directory is absent or empty.
  */
 export async function readScans(): Promise<ScanResult[]> {
-  const scansDir = path.resolve(process.cwd(), "../../scans");
+  const scansDir = scansDirectory();
   let files: string[];
   try {
     files = fs.readdirSync(scansDir).filter((f) => f.endsWith(".json"));

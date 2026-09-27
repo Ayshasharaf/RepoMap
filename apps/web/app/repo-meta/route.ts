@@ -9,10 +9,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Only a public https://github.com/owner/repo URL is accepted" }, { status: 400 });
   }
   const [owner, repo] = [match[1], match[2]];
-  const headers = {
+  const headers: Record<string, string> = {
     Accept: "application/vnd.github+json",
     "User-Agent": "repomap",
   };
+  const token = process.env.GITHUB_TOKEN?.trim();
+  if (token) headers.Authorization = `Bearer ${token}`;
   try {
     const repoRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
       headers,

@@ -218,19 +218,31 @@ a { color: var(--primary); }
 .sidebar-repo {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 7px 10px;
+  gap: 2px;
+  padding: 2px 4px 2px 0;
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
   color: color-mix(in srgb, var(--on-deep) 65%, transparent);
-  cursor: pointer;
-  transition: background 100ms, color 100ms;
-  text-align: left;
   width: 100%;
+  min-width: 0;
+}
+
+.sidebar-repo-open {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  padding: 7px 4px 7px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
   font-size: 13px;
   font-weight: 500;
-  min-width: 0;
 }
 
 .sidebar-repo:hover {
@@ -256,6 +268,34 @@ a { color: var(--primary); }
 .sidebar-repo.is-on .sidebar-repo-dot {
   background: var(--live);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--live) 28%, transparent);
+}
+
+.sidebar-repo-actions {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.sidebar-repo-action {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.sidebar-repo-action:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--on-deep);
+}
+
+.sidebar-repo-action:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 
 .sidebar-repo-name {
@@ -940,7 +980,8 @@ a.finding-file:active { color: var(--deep); }
 }
 
 .tag-scope_gap, .tag-broken_relation { background: var(--risk-soft); color: var(--risk); }
-.tag-n_plus_one { background: var(--warn-soft); color: var(--warn); }
+.tag-n_plus_one, .tag-parse_error { background: var(--warn-soft); color: var(--warn); }
+.tag-incomplete { background: var(--logic-soft); color: var(--logic); }
 
 /* =========================================================
    Architecture board
@@ -1776,7 +1817,8 @@ input:focus-visible {
 }
 
 .sidebar-nav-item:focus-visible,
-.sidebar-repo:focus-visible,
+.sidebar-repo-open:focus-visible,
+.sidebar-repo-action:focus-visible,
 .sidebar-scan-btn:focus-visible,
 .sidebar-scan-input:focus-visible {
   outline-color: color-mix(in srgb, var(--on-deep) 80%, transparent);

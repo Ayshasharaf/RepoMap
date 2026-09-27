@@ -1,5 +1,5 @@
 export interface Finding {
-  kind: "scope_gap" | "n_plus_one" | "broken_relation";
+  kind: "scope_gap" | "n_plus_one" | "broken_relation" | "parse_error" | "incomplete";
   file: string;
   symbol: string;
   detail: string;
@@ -98,6 +98,7 @@ export interface RepoMeta {
 export interface ScanResult {
   service: string;
   commit: string;
+  source?: string;
   summary: string;
   entities: Entity[];
   relations: Relation[];

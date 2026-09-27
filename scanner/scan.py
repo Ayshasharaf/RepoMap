@@ -30,14 +30,64 @@ def _relative(path: Path, root: str) -> str:
         return str(path)
 
 
-def _parse(path: Path):
-    """Return (tree, source) or (None, None) on failure."""
+def _parse(path: Path, failures: list | None = None, root: str = ""):
+    """Return (tree, source). On failure return (None, None) and record a finding."""
     try:
         source = path.read_text(encoding="utf-8", errors="ignore")
         tree = javalang.parse.parse(source)
         return tree, source
-    except Exception:
+    except Exception as exc:
+        if failures is not None:
+            _append_parse_failure(failures, path, root, exc)
         return None, None
+
+
+def _parse_reason(exc: BaseException) -> str:
+    description = getattr(exc, "description", None)
+    at = getattr(exc, "at", None)
+    position = getattr(at, "position", None) if at is not None else None
+    if description and position is not None:
+        line = getattr(position, "line", None)
+        column = getattr(position, "column", None)
+        if line and column:
+            return f"{description} at line {line}, column {column}"
+    text = str(exc).strip()
+    if text:
+        return text.splitlines()[0]
+    if description:
+        return str(description)
+    return exc.__class__.__name__
+
+
+def parse_failure_finding(path: Path, root: str, exc: BaseException) -> dict:
+    reason = _parse_reason(exc)
+    if len(reason) > 180:
+        reason = reason[:177] + "..."
+    return {
+        "kind": "parse_error",
+        "file": _relative(path, root),
+        "symbol": path.stem,
+        "detail": f"Could not parse this file, so it was left out of the scan. {reason}",
+    }
+
+
+def _append_parse_failure(findings: list, path: Path, root: str, exc: BaseException) -> None:
+    rel = _relative(path, root)
+    if any(item.get("kind") == "parse_error" and item.get("file") == rel for item in findings):
+        return
+    findings.append(parse_failure_finding(path, root, exc))
+
+
+def merge_findings(findings: list, extra: list) -> list:
+    seen = {(item.get("kind"), item.get("file"), item.get("symbol"), item.get("detail")) for item in findings}
+    for item in extra:
+        key = (item.get("kind"), item.get("file"), item.get("symbol"), item.get("detail"))
+        if key in seen:
+            continue
+        seen.add(key)
+        findings.append(item)
+    findings.sort(key=lambda item: (item.get("symbol", ""), item.get("file", ""), item.get("detail", "")))
+    return findings
 
 
 def _has_annotation(node, name: str) -> bool:
@@ -93,14 +143,14 @@ def _simple_class_name(type_node) -> str | None:
 # Pass 1: collect entity metadata
 # ---------------------------------------------------------------------------
 
-def _scan_entities(java_files: list[Path], root: str) -> dict:
+def _scan_entities(java_files: list[Path], root: str, parse_failures: list | None = None) -> dict:
     """
     Returns {ClassName: {"name": str, "tenantOwned": bool,
                          "file": str, "fields": {fieldName: typeName}}}
     """
     entities = {}
     for path in java_files:
-        tree, _ = _parse(path)
+        tree, _ = _parse(path, parse_failures, root)
         if tree is None:
             continue
         for _, cls in tree.filter(javalang.tree.ClassDeclaration):
@@ -1331,25 +1381,132 @@ class _FileWatch:
         return len(self.files)
 
 
+DEFAULT_MAX_JAVA_FILES = 2500
+_MODULE_MARKERS = {"pom.xml", "build.gradle", "build.gradle.kts"}
+_SKIP_MODULE_DIRS = {".git", "node_modules", "target", "build", ".gradle", "out"}
+
+
+def _max_java_files() -> int:
+    raw = os.environ.get("REPOMAP_MAX_JAVA_FILES", "").strip()
+    if not raw:
+        return DEFAULT_MAX_JAVA_FILES
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_MAX_JAVA_FILES
+    return value if value > 0 else DEFAULT_MAX_JAVA_FILES
+
+
+def _module_roots(root: Path) -> list[Path]:
+    found = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [name for name in dirnames if name not in _SKIP_MODULE_DIRS and not name.startswith(".")]
+        if _MODULE_MARKERS & set(filenames):
+            found.append(Path(dirpath))
+    return found
+
+
+def _group_by_module(java_files: list[Path], root: str) -> list[tuple[str, list[Path]]]:
+    base = Path(root)
+    deepest_first = sorted(_module_roots(base), key=lambda path: len(path.parts), reverse=True)
+    buckets: dict[str, list[Path]] = {}
+    for path in java_files:
+        owner = base
+        for module in deepest_first:
+            try:
+                path.relative_to(module)
+            except ValueError:
+                continue
+            owner = module
+            break
+        rel = "." if owner == base else _relative(owner, root)
+        buckets.setdefault(rel, []).append(path)
+    groups = []
+    for rel, files in buckets.items():
+        files.sort()
+        groups.append((rel, files))
+    groups.sort(key=lambda item: item[0])
+    return groups
+
+
+def _incomplete_finding(rel: str, detail: str) -> dict:
+    return {
+        "kind": "incomplete",
+        "file": "." if rel in ("", ".") else rel,
+        "symbol": "",
+        "detail": detail,
+    }
+
+
+def _select_java_files(java_files: list[Path], root: str) -> tuple[list[Path], list[dict]]:
+    """Keep every file under the cap. Above it, take whole modules in path order."""
+    limit = _max_java_files()
+    if len(java_files) <= limit:
+        return java_files, []
+    chosen: list[Path] = []
+    skipped: list[tuple[str, list[Path]]] = []
+    budget = limit
+    for rel, files in _group_by_module(java_files, root):
+        if len(files) <= budget:
+            chosen.extend(files)
+            budget -= len(files)
+        else:
+            skipped.append((rel, files))
+    findings = []
+    if not chosen and skipped:
+        skipped.sort(key=lambda item: (len(item[1]), item[0]))
+        rel, files = skipped.pop(0)
+        taken = files[:limit]
+        chosen.extend(taken)
+        findings.append(_incomplete_finding(
+            rel,
+            (
+                f"Only {len(taken)} of {len(files)} Java files in this module were scanned. "
+                f"The cap is {limit} files (REPOMAP_MAX_JAVA_FILES)."
+            ),
+        ))
+    for rel, files in skipped:
+        findings.append(_incomplete_finding(
+            rel,
+            (
+                f"{len(files)} Java files in this module were not scanned so the repo stays within "
+                f"the {limit}-file cap. Raise REPOMAP_MAX_JAVA_FILES to include them."
+            ),
+        ))
+    chosen.sort()
+    return chosen, findings
+
+
+def _finish(result: dict, java_files: list[Path], root: str, extra: list[dict], omitted: int) -> dict:
+    result["findings"] = merge_findings(result.get("findings") or [], extra)
+    result["scannedFiles"] = sorted(_relative(path, root) for path in java_files)
+    if omitted:
+        result["summary"] += f" {omitted} Java files were left out of the {_max_java_files()}-file cap."
+    return result
+
+
 def scan_directory(root: str, commit: str = "local", progress=None) -> dict:
     root = os.path.abspath(root)
-    java_files = _collect_java_files(root)
+    all_java = _collect_java_files(root)
 
-    if not java_files:
-        return _unscored(root, commit, "No Java files found")
+    if not all_java:
+        result = _unscored(root, commit, "No Java files found")
+        result["scannedFiles"] = []
+        return result
+
+    java_files, incomplete = _select_java_files(all_java, root)
+    omitted = len(all_java) - len(java_files)
+    parse_failures: list[dict] = []
 
     watch = _FileWatch(java_files, root, progress, "classes")
-    entity_map = _scan_entities(watch, root)
-
-    if len(java_files) > 500:
-        return _unscored(root, commit, f"Too many Java files ({len(java_files)} > 500)")
+    entity_map = _scan_entities(watch, root, parse_failures)
 
     watch.phase = "routes"
     flow, classes = _scan_flow(watch, entity_map, root)
     if not entity_map:
         result = _unscored(root, commit, "No @Entity classes found")
         result["diagrams"] = _make_diagrams({}, [], [], flow, classes)
-        return result
+        return _finish(result, java_files, root, parse_failures + incomplete, omitted)
 
     watch.phase = "links"
     relations = _scan_relations(watch, root, entity_map)
@@ -1358,6 +1515,7 @@ def scan_directory(root: str, commit: str = "local", progress=None) -> dict:
     watch.phase = "urls"
     endpoints = _scan_endpoints(watch, root, entity_map, repo_method_scope_gaps)
 
+    findings = merge_findings(findings, parse_failures + incomplete)
     scope_gaps = sum(1 for f in findings if f["kind"] == "scope_gap")
     n_plus_one = sum(1 for f in findings if f["kind"] == "n_plus_one")
     broken_relations = sum(1 for f in findings if f["kind"] == "broken_relation")
@@ -1376,14 +1534,17 @@ def scan_directory(root: str, commit: str = "local", progress=None) -> dict:
     )
 
     service_name = os.path.basename(root)
+    summary = (
+        f"{len(entity_map)} entities, {len(endpoints)} endpoints, "
+        f"{len(findings)} findings"
+    )
+    if omitted:
+        summary += f" {omitted} Java files were left out of the {_max_java_files()}-file cap."
 
-    result = {
+    return {
         "service": service_name,
         "commit": commit,
-        "summary": (
-            f"{len(entity_map)} entities, {len(endpoints)} endpoints, "
-            f"{len(findings)} findings"
-        ),
+        "summary": summary,
         "entities": entities_out,
         "relations": relations,
         "endpoints": endpoints,
@@ -1396,8 +1557,8 @@ def scan_directory(root: str, commit: str = "local", progress=None) -> dict:
             "risk": risk,
         },
         "diagrams": _make_diagrams(entity_map, relations, endpoints, flow, classes),
+        "scannedFiles": sorted(_relative(path, root) for path in java_files),
     }
-    return result
 
 
 def _unscored(root: str, commit: str, reason: str) -> dict:
@@ -1450,6 +1611,7 @@ def main():
 
     commit = _get_git_commit(root)
     data = scan_directory(root, commit)
+    data.pop("scannedFiles", None)
 
     out_dir = Path("scans")
     out_dir.mkdir(exist_ok=True)
