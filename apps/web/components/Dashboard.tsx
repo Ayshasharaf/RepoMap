@@ -16,24 +16,6 @@ const PHASE_LABEL: Record<string, string> = {
   diagram:   "Drawing architecture…",
 };
 
-const EXAMPLE_REPOS = [
-  {
-    url: "https://github.com/spring-projects/spring-petclinic",
-    label: "spring-petclinic",
-    hint: "Spring Boot · scored",
-  },
-  {
-    url: "https://github.com/pallets/flask",
-    label: "flask",
-    hint: "Python · architecture",
-  },
-  {
-    url: "https://github.com/expressjs/express",
-    label: "express",
-    hint: "Node · architecture",
-  },
-] as const;
-
 async function readScanStream(
   res: Response,
   onPhase: (label: string) => void,
@@ -85,7 +67,7 @@ const PREVIEWS = [
   { label: "Data flow",      hint: "Each route as a line of stops, from the request to storage.",             sketch: "rail" },
   { label: "Endpoints",      hint: "A filterable list of every HTTP route.",                                 sketch: "table" },
   { label: "Dependencies",   hint: "Libraries on shelves, named by what they are for.",                      sketch: "shelves" },
-  { label: "Entry points",   hint: "The class that starts it, and the command that runs it.",                 sketch: "term" },
+  { label: "Entry points",   hint: "Run commands and process starts from the build files and README.",       sketch: "term" },
   { label: "Key paths",      hint: "Routes that reach a database or external system.",                       sketch: "risk" },
   { label: "Health",         hint: "Tests, CI, stars, and how big the latest commit is.",                    sketch: "signals" },
 ] as const;
@@ -762,76 +744,85 @@ function ArchBoard({
 
   return (
     <div className="arch-board">
-      <div className="diagram-toolbar">
-        <div className="method-filters" role="group" aria-label="Diagram">
-          {systemChart && (
-            <button type="button" className={view === "system" ? "is-on" : ""} onClick={() => { setView("system"); setPicked(null); setZoom(1); }}>
-              System
-            </button>
-          )}
-          {modulesChart && (
-            <button type="button" className={view === "modules" ? "is-on" : ""} onClick={() => { setView("modules"); setPicked(null); setZoom(1); }}>
-              Modules
-            </button>
-          )}
-        </div>
-        <div className="diagram-toolbar-actions">
-          <button
-            type="button"
-            className="btn-ghost"
-            onClick={() => setZoom((value) => Math.max(0.35, Math.round((value - 0.15) * 100) / 100))}
-            aria-label="Zoom out"
-          >
-            −
-          </button>
-          <button type="button" className="btn-ghost" onClick={() => fitToCanvas()} title="Fit diagram to the panel width">
-            Fit
-          </button>
-          <button
-            type="button"
-            className="btn-ghost"
-            onClick={() => setZoom((value) => Math.min(2.5, Math.round((value + 0.15) * 100) / 100))}
-            aria-label="Zoom in"
-          >
-            +
-          </button>
-          <span className="zoom-readout" aria-live="polite">{Math.round(zoom * 100)}%</span>
-          <button type="button" className="btn-ghost" onClick={() => { void copyMermaid(); }} disabled={!activeChart}>
-            {copied ? "Mermaid copied" : "Copy Mermaid"}
-          </button>
-        </div>
-      </div>
-
-      {activeChart ? (
-        <div className="diagram-canvas" ref={canvasRef}>
-          <div
-            className="diagram-zoom-frame"
-            style={{
-              width: natural.w ? `${Math.ceil(natural.w * zoom)}px` : undefined,
-              height: natural.h ? `${Math.ceil(natural.h * zoom)}px` : undefined,
-            }}
-          >
-            <div
-              className="diagram-zoom"
-              ref={zoomInnerRef}
-              style={{
-                transform: `scale(${zoom})`,
-                transformOrigin: "top left",
-              }}
-            >
-              <MermaidDiagram
-                chart={activeChart}
-                id={`${service}-${view}`}
-                selectable={selectable}
-                active={picked}
-                onPick={setPicked}
-              />
+      <div className="diagram-panel">
+        <div className="diagram-panel-head">
+          <div className="diagram-toolbar">
+            <div className="method-filters" role="group" aria-label="Diagram">
+              {systemChart && (
+                <button type="button" className={view === "system" ? "is-on" : ""} onClick={() => { setView("system"); setPicked(null); setZoom(1); }}>
+                  System
+                </button>
+              )}
+              {modulesChart && (
+                <button type="button" className={view === "modules" ? "is-on" : ""} onClick={() => { setView("modules"); setPicked(null); setZoom(1); }}>
+                  Modules
+                </button>
+              )}
+            </div>
+            <div className="diagram-toolbar-actions">
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => setZoom((value) => Math.max(0.35, Math.round((value - 0.15) * 100) / 100))}
+                aria-label="Zoom out"
+              >
+                −
+              </button>
+              <button type="button" className="btn-ghost" onClick={() => fitToCanvas()} title="Fit diagram to the panel width">
+                Fit
+              </button>
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => setZoom((value) => Math.min(2.5, Math.round((value + 0.15) * 100) / 100))}
+                aria-label="Zoom in"
+              >
+                +
+              </button>
+              <span className="zoom-readout" aria-live="polite">{Math.round(zoom * 100)}%</span>
+              <button type="button" className="btn-ghost" onClick={() => { void copyMermaid(); }} disabled={!activeChart}>
+                {copied ? "Mermaid copied" : "Copy Mermaid"}
+              </button>
             </div>
           </div>
+          <p className="diagram-panel-hint">
+            {view === "system"
+              ? "Click a box to inspect its class, file, and methods."
+              : "Click a module to see the classes it contains."}
+          </p>
         </div>
-      ) : (
-        <p className="summary">This scan has no architecture diagram yet. Map the repo again.</p>
-      )}
+
+        {activeChart ? (
+          <div className="diagram-canvas" ref={canvasRef}>
+            <div
+              className="diagram-zoom-frame"
+              style={{
+                width: natural.w ? `${Math.ceil(natural.w * zoom)}px` : undefined,
+                height: natural.h ? `${Math.ceil(natural.h * zoom)}px` : undefined,
+              }}
+            >
+              <div
+                className="diagram-zoom"
+                ref={zoomInnerRef}
+                style={{
+                  transform: `scale(${zoom})`,
+                  transformOrigin: "top left",
+                }}
+              >
+                <MermaidDiagram
+                  chart={activeChart}
+                  id={`${service}-${view}`}
+                  selectable={selectable}
+                  active={picked}
+                  onPick={setPicked}
+                />
+              </div>
+            </div>
+          </div>
+        ) : (
+          <p className="summary diagram-panel-empty">This scan has no architecture diagram yet. Map the repo again.</p>
+        )}
+      </div>
 
       {pickedClass && (
         <aside className="diagram-detail">
@@ -868,10 +859,23 @@ function ArchBoard({
       )}
 
       {erd && (
-        <div className="arch-erd">
-          <h2 className="section-title">Stored records</h2>
-          <p className="summary">Each box is an entity. A line is a field that points at another entity.</p>
-          <MermaidDiagram chart={erd} id={`${service}-erd`} />
+        <div className="arch-erd diagram-panel">
+          <div className="diagram-panel-head">
+            <div className="erd-head-row">
+              <div>
+                <h2 className="section-title">Entity relationship</h2>
+                <p className="summary">Each box is a stored record. Lines are foreign keys between entities.</p>
+              </div>
+              <div className="erd-legend" aria-hidden="true">
+                <span><i className="erd-swatch is-entity" /> Entity</span>
+                <span><i className="erd-swatch is-key" /> PK / FK</span>
+                <span><i className="erd-swatch is-rel" /> Relation</span>
+              </div>
+            </div>
+          </div>
+          <div className="erd-canvas">
+            <MermaidDiagram chart={erd} id={`${service}-erd`} />
+          </div>
         </div>
       )}
     </div>
@@ -912,53 +916,121 @@ function Runbook({ scan }: { scan: ScanResult }) {
   const entries = scan.overview?.entryPoints ?? [];
   const steps = scan.overview?.checklist ?? [];
   if (!scan.overview) return <p className="summary">Map this repo again to see how it starts.</p>;
-  const starts = entries.filter((entry) => entry.detail.includes("Spring Boot application") || entry.detail.includes("starts in") || entry.name === "Docker");
-  const commands = steps.filter((step) => step.title !== "Set environment variables" && step.title !== "No setup file found");
-  const run = commands.find((step) => step.title === "Run locally");
-  const rest = commands.filter((step) => step !== run);
+
+  const run = steps.find((step) => step.title === "Run locally")
+    ?? entries.find((entry) => entry.name === "Run locally");
   const env = steps.find((step) => step.title === "Set environment variables");
   const missing = steps.find((step) => step.title === "No setup file found");
+
+  const processEntries = entries.filter((entry) => {
+    const name = entry.name;
+    const detail = entry.detail.toLowerCase();
+    return (
+      name === "Docker"
+      || name === "Process"
+      || name === "CLI"
+      || name === "Compose"
+      || detail.includes("starts in")
+      || detail.includes("spring boot application")
+      || detail.includes("binary entry")
+    );
+  });
+
+  const commandSteps = steps.filter((step) =>
+    !["Set environment variables", "No setup file found", "Run locally"].includes(step.title)
+  );
+
+  const stack = scan.overview?.identity?.stack ?? [];
+  const language = scan.overview?.identity?.language || "";
+
   return (
     <div className="runbook">
-      {run ? (
-        <article className="run-hero">
-          <p className="eyebrow">Run locally</p>
-          <code>{run.detail}</code>
-        </article>
-      ) : (
-        <p className="summary">No run command was found in the build files or README.</p>
-      )}
-      <div className="starts">
-        {starts.length === 0 && <p className="summary">No @SpringBootApplication class was found.</p>}
-        {starts.map((entry) => (
-          <article className="start-card" key={`${entry.name}-${entry.detail}`}>
-            <span>{entry.name === "Docker" ? "Container" : "Process starts in"}</span>
-            <strong>{entry.name}</strong>
-            <code>{entry.detail}</code>
-          </article>
-        ))}
-      </div>
-      {rest.length > 0 && (
-        <div className="run-grid">
-          {rest.map((step) => (
-            <article className="run-card" key={`${step.title}-${step.detail}`}>
-              <small>{step.title}</small>
-              <code>{step.detail}</code>
-            </article>
+      {(language || stack.length > 0) && (
+        <div className="runbook-stack">
+          {language && <span className="overview-chip">{language}</span>}
+          {stack.slice(0, 4).map((item) => (
+            <span className="overview-chip" key={item}>{item}</span>
           ))}
         </div>
       )}
+
+      {run ? (
+        <article className="run-hero">
+          <p className="eyebrow">Primary run command</p>
+          <code>{run.detail}</code>
+          <p className="run-hero-note">Detected from build files, lockfiles, or the README.</p>
+        </article>
+      ) : (
+        <div className="runbook-empty">
+          <p className="summary">No primary run command was detected.</p>
+          <p className="summary">
+            RepoMap looks for <code>package.json</code> scripts, Maven/Gradle, <code>go.mod</code>,
+            <code>Cargo.toml</code>, Python/Flask/Django/FastAPI, Rails, Laravel, Docker, Makefile targets,
+            and shell blocks in the README.
+          </p>
+        </div>
+      )}
+
+      {processEntries.length > 0 && (
+        <section className="runbook-block">
+          <h2 className="section-title">Where it starts</h2>
+          <p className="summary">Application entry files, CLIs, and container commands found in the clone.</p>
+          <div className="starts">
+            {processEntries.map((entry) => (
+              <article className="start-card" key={`${entry.name}-${entry.detail}`}>
+                <span>{processKindLabel(entry.name, entry.detail)}</span>
+                <strong>{processTitle(entry.name, entry.detail)}</strong>
+                <code>{entry.detail}</code>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {commandSteps.length > 0 && (
+        <section className="runbook-block">
+          <h2 className="section-title">Other commands</h2>
+          <div className="run-grid">
+            {commandSteps.map((step) => (
+              <article className="run-card" key={`${step.title}-${step.detail}`}>
+                <small>{step.title}</small>
+                <code>{step.detail}</code>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+
       {env && (
         <div className="env-block">
           <h2 className="section-title">Environment</h2>
+          <p className="summary">Variables referenced in env examples or app config.</p>
           <div className="env-grid">
             {env.detail.split(", ").map((name) => <code key={name}>{name}</code>)}
           </div>
         </div>
       )}
-      {missing && <p className="summary">{missing.detail}</p>}
+
+      {missing && !run && processEntries.length === 0 && (
+        <p className="summary">{missing.detail}</p>
+      )}
     </div>
   );
+}
+
+function processKindLabel(name: string, detail: string) {
+  if (name === "Docker" || name === "Compose") return "Container";
+  if (name === "CLI") return "CLI entry";
+  if (detail.toLowerCase().includes("spring boot")) return "Application class";
+  return "Process entry";
+}
+
+function processTitle(name: string, detail: string) {
+  if (name === "Docker" || name === "Compose" || name === "CLI" || name === "Process") {
+    const file = detail.match(/(?:Starts in |Binary entry · |· )(.+)$/)?.[1];
+    return file || name;
+  }
+  return name;
 }
 
 function HealthBoard({ scan, meta }: { scan: ScanResult; meta: RepoMeta | null }) {
@@ -1105,32 +1177,44 @@ function FlowSection({
       )}
 
       {flowTab === "sequence" && story?.sequence && (
-        <div className="diagram-block">
-          <div className="seq-callout">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-            <span>Sequence diagram shows the message flow between actors for this route.</span>
+        <div className="diagram-panel">
+          <div className="diagram-panel-head">
+            <div className="seq-callout">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+              <span>Sequence diagram shows the message flow between actors for this route.</span>
+            </div>
           </div>
-          <MermaidDiagram chart={story.sequence} id={`${scan.service}-seq-${routeIndex}`} />
+          <div className="diagram-canvas is-flow">
+            <MermaidDiagram chart={story.sequence} id={`${scan.service}-seq-${routeIndex}`} />
+          </div>
         </div>
       )}
 
       {flowTab === "transaction" && story?.transaction && (
-        <div className="diagram-block">
-          <div className="seq-callout">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/></svg>
-            <span>Shows which database operations happen inside a transaction boundary.</span>
+        <div className="diagram-panel">
+          <div className="diagram-panel-head">
+            <div className="seq-callout">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/></svg>
+              <span>Shows which database operations happen inside a transaction boundary.</span>
+            </div>
           </div>
-          <MermaidDiagram chart={story.transaction} id={`${scan.service}-tx-${routeIndex}`} />
+          <div className="diagram-canvas is-flow">
+            <MermaidDiagram chart={story.transaction} id={`${scan.service}-tx-${routeIndex}`} />
+          </div>
         </div>
       )}
 
       {flowTab === "trigger" && story?.trigger && (
-        <div className="diagram-block">
-          <div className="seq-callout">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-            <span>Database triggers that fire as a result of this route.</span>
+        <div className="diagram-panel">
+          <div className="diagram-panel-head">
+            <div className="seq-callout">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+              <span>Database triggers that fire as a result of this route.</span>
+            </div>
           </div>
-          <MermaidDiagram chart={story.trigger} id={`${scan.service}-trig-${routeIndex}`} />
+          <div className="diagram-canvas is-flow">
+            <MermaidDiagram chart={story.trigger} id={`${scan.service}-trig-${routeIndex}`} />
+          </div>
         </div>
       )}
     </div>
@@ -1179,7 +1263,7 @@ function DetailPanel({
     flow:     { title: "Data flow",      hint: "Pick a route and a diagram type. Call chain shows numbered steps. Sequence shows actor messages. Transaction shows DB scope." },
     deps:     { title: "Dependencies",   hint: "Which group uses which, then the libraries in the build file." },
     endpoints:{ title: "Endpoints",      hint: "Every HTTP route this scan found. Filter by method, path, or entity." },
-    entry:    { title: "Entry points",   hint: "If you want to run this, start here." },
+    entry:    { title: "Entry points",   hint: "How to run this repo — commands and process starts detected from build files, Docker, and the README." },
     key:      { title: "Key paths",      hint: "Request paths that reach persistence or storage. Click a step to see its methods." },
     health:   { title: "Health",         hint: "Test files, CI workflows, and the latest commit from the clone. Stars and open issues from GitHub." },
   };

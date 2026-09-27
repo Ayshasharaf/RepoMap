@@ -510,7 +510,10 @@ def _readme_commands(root: Path) -> list[str]:
             command = line.strip().lstrip("$").strip()
             if not command or command.startswith("#"):
                 continue
-            if not re.match(r"(\./)?(mvnw|gradlew|mvn|gradle|docker|java|npm|pnpm|yarn|python|python3|uvicorn|flask|go|cargo)\b", command):
+            if not re.match(
+                r"(\./)?(mvnw|gradlew|mvn|gradle|docker|docker-compose|compose|java|npm|pnpm|yarn|bun|python|python3|uvicorn|flask|poetry|pip|go|cargo|make|bundle|php|artisan|dotnet)\b",
+                command,
+            ):
                 continue
             if command in seen:
                 continue
@@ -549,17 +552,26 @@ def _checklist(entries: list[dict], env_vars: list[str]) -> list[dict]:
         steps.append({"title": "Set environment variables", "detail": shown + extra})
     run = next((item["detail"] for item in entries if item["name"] == "Run locally"), "")
     test = next((item["detail"] for item in entries if item["name"] == "Tests"), "")
+    build = next((item["detail"] for item in entries if item["name"] == "Build"), "")
     if run:
         steps.append({"title": "Run locally", "detail": run})
     if test:
         steps.append({"title": "Run tests", "detail": test})
+    if build:
+        steps.append({"title": "Build", "detail": build})
     if any(item["name"] == "Docker" for item in entries):
-        steps.append({"title": "Or start the container", "detail": "docker build and run, using the Dockerfile command"})
+        docker_detail = next(item["detail"] for item in entries if item["name"] == "Docker")
+        steps.append({"title": "Container", "detail": docker_detail})
+    if any(item["name"] == "Compose" for item in entries):
+        steps.append({"title": "Compose", "detail": "docker compose up"})
     for item in entries:
-        if item["name"] == "From the README" and item["detail"] not in {run, test}:
+        if item["name"] == "From the README" and item["detail"] not in {run, test, build}:
             steps.append({"title": "From the README", "detail": item["detail"]})
     if not steps:
-        steps.append({"title": "No setup file found", "detail": "This clone has no build file, Dockerfile, or env example."})
+        steps.append({
+            "title": "No setup file found",
+            "detail": "No package.json, pom.xml, go.mod, Dockerfile, Makefile, or README run block was found.",
+        })
     return steps
 
 

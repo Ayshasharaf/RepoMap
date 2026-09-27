@@ -1178,59 +1178,177 @@ def _merge_named(current: list[dict], extra: list[dict]) -> list[dict]:
 
 
 def _entries(root: Path, external: list[dict]) -> list[dict]:
-    entries = []
+    """Detect how to start this repo for any common stack."""
+    entries: list[dict] = []
+    names = {item["name"].lower() for item in external}
+
     package = root / "package.json"
     if package.is_file():
         try:
-            scripts = json.loads(package.read_text(encoding="utf-8")).get("scripts") or {}
+            pkg = json.loads(package.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
-            scripts = {}
+            pkg = {}
+        scripts = pkg.get("scripts") if isinstance(pkg.get("scripts"), dict) else {}
+        runner = "npm"
+        if (root / "pnpm-lock.yaml").is_file():
+            runner = "pnpm"
+        elif (root / "yarn.lock").is_file():
+            runner = "yarn"
+        elif (root / "bun.lockb").is_file() or (root / "bun.lock").is_file():
+            runner = "bun"
+        run_cmd = {
+            "npm": ("npm run {s}", "npm start", "npm test", "npm run build"),
+            "pnpm": ("pnpm {s}", "pnpm start", "pnpm test", "pnpm build"),
+            "yarn": ("yarn {s}", "yarn start", "yarn test", "yarn build"),
+            "bun": ("bun run {s}", "bun start", "bun test", "bun run build"),
+        }[runner]
         if scripts.get("dev"):
-            entries.append({"name": "Run locally", "detail": "npm run dev"})
+            entries.append({"name": "Run locally", "detail": run_cmd[0].format(s="dev")})
         elif scripts.get("start"):
-            entries.append({"name": "Run locally", "detail": "npm start"})
+            entries.append({"name": "Run locally", "detail": run_cmd[1]})
+        elif scripts.get("serve"):
+            entries.append({"name": "Run locally", "detail": run_cmd[0].format(s="serve")})
         if scripts.get("test"):
-            entries.append({"name": "Tests", "detail": "npm test"})
+            entries.append({"name": "Tests", "detail": run_cmd[2] if runner == "npm" else run_cmd[0].format(s="test")})
+        elif scripts.get("test:unit"):
+            entries.append({"name": "Tests", "detail": run_cmd[0].format(s="test:unit")})
         if scripts.get("build"):
-            entries.append({"name": "Build", "detail": "npm run build"})
+            entries.append({"name": "Build", "detail": run_cmd[3]})
+        main = pkg.get("main") or pkg.get("module")
+        if isinstance(main, str) and main:
+            entries.append({"name": "Process", "detail": f"Starts in {main}"})
+        bins = pkg.get("bin")
+        if isinstance(bins, str):
+            entries.append({"name": "CLI", "detail": f"Binary entry · {bins}"})
+        elif isinstance(bins, dict):
+            for label, path in list(bins.items())[:3]:
+                entries.append({"name": "CLI", "detail": f"{label} · {path}"})
 
-    if (root / "pyproject.toml").is_file() or (root / "requirements.txt").is_file():
-        names = {item["name"].lower() for item in external}
+    if (root / "pyproject.toml").is_file() or (root / "requirements.txt").is_file() or (root / "Pipfile").is_file():
         if "fastapi" in names or "uvicorn" in names:
-            entries.append({"name": "Run locally", "detail": "uvicorn main:app --reload"})
+            app = "main:app"
+            for candidate in ("main.py", "app.py", "api.py", "src/main.py", "app/main.py"):
+                if (root / candidate).is_file():
+                    module = candidate.replace("/", ".").removesuffix(".py")
+                    app = f"{module}:app"
+                    entries.append({"name": "Process", "detail": f"Starts in {candidate}"})
+                    break
+            entries.append({"name": "Run locally", "detail": f"uvicorn {app} --reload"})
         elif "flask" in names:
             entries.append({"name": "Run locally", "detail": "flask run"})
-        elif "django" in names or "djangorestframework" in names:
+            for candidate in ("app.py", "wsgi.py", "application.py"):
+                if (root / candidate).is_file():
+                    entries.append({"name": "Process", "detail": f"Starts in {candidate}"})
+                    break
+        elif "django" in names or "djangorestframework" in names or (root / "manage.py").is_file():
             entries.append({"name": "Run locally", "detail": "python manage.py runserver"})
-        elif (root / "main.py").is_file():
-            entries.append({"name": "Run locally", "detail": "python main.py"})
-        entries.append({"name": "Tests", "detail": "pytest"})
+            if (root / "manage.py").is_file():
+                entries.append({"name": "Process", "detail": "Starts in manage.py"})
+        else:
+            for candidate in ("main.py", "app.py", "run.py", "__main__.py", "server.py"):
+                if (root / candidate).is_file():
+                    entries.append({"name": "Process", "detail": f"Starts in {candidate}"})
+                    entries.append({"name": "Run locally", "detail": f"python {candidate}"})
+                    break
+        if (root / "pytest.ini").is_file() or (root / "pyproject.toml").is_file() or (root / "tests").is_dir():
+            entries.append({"name": "Tests", "detail": "pytest"})
 
-    gomod = root / "go.mod"
-    if gomod.is_file() and gomod.stat().st_size > 10:
+    if (root / "go.mod").is_file():
         entries.append({"name": "Run locally", "detail": "go run ."})
         entries.append({"name": "Tests", "detail": "go test ./..."})
+        for candidate in ("main.go", "cmd/server/main.go", "cmd/api/main.go", "cmd/main.go"):
+            if (root / candidate).is_file():
+                entries.append({"name": "Process", "detail": f"Starts in {candidate}"})
+                break
 
     if (root / "Cargo.toml").is_file():
         entries.append({"name": "Run locally", "detail": "cargo run"})
         entries.append({"name": "Tests", "detail": "cargo test"})
+        for candidate in ("src/main.rs", "src/lib.rs"):
+            if (root / candidate).is_file():
+                entries.append({"name": "Process", "detail": f"Starts in {candidate}"})
+                break
 
     if (root / "Gemfile").is_file():
         entries.append({"name": "Run locally", "detail": "bundle exec rails server"})
         entries.append({"name": "Tests", "detail": "bundle exec rspec"})
+        if (root / "config" / "application.rb").is_file():
+            entries.append({"name": "Process", "detail": "Starts in config/application.rb"})
 
     if (root / "composer.json").is_file():
-        entries.append({"name": "Run locally", "detail": "php artisan serve"})
+        if (root / "artisan").is_file():
+            entries.append({"name": "Run locally", "detail": "php artisan serve"})
+            entries.append({"name": "Process", "detail": "Starts in artisan"})
         entries.append({"name": "Tests", "detail": "vendor/bin/phpunit"})
 
+    # Maven / Gradle without requiring Spring Boot
+    mvn = "./mvnw" if (root / "mvnw").is_file() else "mvn"
+    gradle = "./gradlew" if (root / "gradlew").is_file() else "gradle"
+    if (root / "pom.xml").is_file():
+        blob = (root / "pom.xml").read_text(encoding="utf-8", errors="ignore").lower()
+        if "spring-boot" in blob:
+            entries.append({"name": "Run locally", "detail": f"{mvn} spring-boot:run"})
+        entries.append({"name": "Build", "detail": f"{mvn} -DskipTests package"})
+        entries.append({"name": "Tests", "detail": f"{mvn} test"})
+    elif any((root / name).is_file() for name in ("build.gradle", "build.gradle.kts")):
+        blob = ""
+        for name in ("build.gradle", "build.gradle.kts"):
+            path = root / name
+            if path.is_file():
+                blob += path.read_text(encoding="utf-8", errors="ignore").lower()
+        if "spring-boot" in blob or "org.springframework.boot" in blob:
+            entries.append({"name": "Run locally", "detail": f"{gradle} bootRun"})
+        entries.append({"name": "Build", "detail": f"{gradle} build"})
+        entries.append({"name": "Tests", "detail": f"{gradle} test"})
+
+    docker = root / "Dockerfile"
+    if docker.is_file():
+        for line in docker.read_text(encoding="utf-8", errors="ignore").splitlines():
+            stripped = line.strip()
+            upper = stripped.upper()
+            if upper.startswith("CMD") or upper.startswith("ENTRYPOINT"):
+                entries.append({"name": "Docker", "detail": stripped})
+                break
+        else:
+            entries.append({"name": "Docker", "detail": "Dockerfile present"})
+        if not any(e["name"] == "Run locally" for e in entries):
+            entries.append({"name": "Run locally", "detail": "docker build -t app . && docker run --rm -p 8080:8080 app"})
+
+    if (root / "docker-compose.yml").is_file() or (root / "compose.yaml").is_file():
+        entries.append({"name": "Compose", "detail": "docker compose up"})
+
+    if (root / "Makefile").is_file():
+        text = (root / "Makefile").read_text(encoding="utf-8", errors="ignore")
+        for target in ("run", "dev", "start", "serve", "up"):
+            if re.search(rf"^{target}\s*:", text, re.M):
+                entries.append({"name": "Run locally", "detail": f"make {target}"})
+                break
+        if re.search(r"^test\s*:", text, re.M):
+            entries.append({"name": "Tests", "detail": "make test"})
+
     for rel in (
-        "main.py", "app.py", "manage.py", "main.go",
+        "main.py", "app.py", "manage.py", "main.go", "run.py", "server.py",
         "src/main.ts", "src/index.ts", "src/main.js", "src/index.js",
+        "src/main.rs", "cmd/server/main.go", "cmd/api/main.go",
     ):
-        if (root / rel).is_file():
+        if (root / rel).is_file() and not any(
+            rel in e.get("detail", "") for e in entries
+        ):
             entries.append({"name": "Process", "detail": f"Starts in {rel}"})
 
-    return entries
+    # Dedupe by detail while keeping first meaningful names
+    seen: set[str] = set()
+    unique: list[dict] = []
+    for item in entries:
+        detail = item["detail"]
+        if detail in seen:
+            continue
+        # Prefer one Run locally
+        if item["name"] == "Run locally" and any(u["name"] == "Run locally" for u in unique):
+            continue
+        seen.add(detail)
+        unique.append(item)
+    return unique
 
 
 def _merge_entries(current: list[dict], extra: list[dict]) -> list[dict]:
