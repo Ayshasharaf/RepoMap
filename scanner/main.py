@@ -76,6 +76,11 @@ def _clone_and_scan(clean_url: str, repo_slug: str, progress=None, page_url: str
             )
         except subprocess.TimeoutExpired:
             raise HTTPException(status_code=504, detail="Clone timed out after 45 seconds")
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=500,
+                detail="git is not installed on the scanner host. Install git or use the scanner Dockerfile.",
+            )
         except subprocess.CalledProcessError as exc:
             detail = (exc.stderr or exc.stdout or "").strip() or "git clone failed"
             raise HTTPException(status_code=422, detail=f"Clone failed: {detail}")
