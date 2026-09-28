@@ -146,10 +146,10 @@ function getMermaid(): Promise<MermaidApi> {
         flowchart: {
           useMaxWidth: false,
           htmlLabels: true,
-          curve: "basis",
-          padding: 18,
-          nodeSpacing: 40,
-          rankSpacing: 52,
+          curve: "linear",
+          padding: 22,
+          nodeSpacing: 48,
+          rankSpacing: 64,
         },
         er: {
           useMaxWidth: true,
