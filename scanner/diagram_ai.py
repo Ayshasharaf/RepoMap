@@ -79,7 +79,7 @@ shape is "database" only for a real data store. It belongs in the persistence gr
 Every other node is shape "box" and has a group.
 Draw adjacent-layer edges only: caller → entry → access → services → data access → database. An edge needs a "uses" hint, a shared name, or a README sentence. Do not connect siblings in the same group. Allow at most 2-3 cross-layer shortcuts when the index clearly requires them (for example security loading users).
 endpoints: include one only when a symbol or the README shows that method and path. Otherwise [].
-erd_entities: only models visible in the index. Otherwise [].
+erd_entities: only models visible in the index. Each entity MUST list concrete fields (name + type; mark PK/FK when known). Names without fields are useless — return [] instead of empty shells.
 data_flow: REQUIRED for an application. List the main request chain using existing node ids (caller → entry → service → persistence → database). Empty only for a tiny library with no call path.
 critical_paths: REQUIRED when endpoints or a clear request path exist. Each hop is a node label or id. Empty only when no route reaches a store.
 """
@@ -545,6 +545,9 @@ def _erd_entities(graph: dict) -> list[dict]:
             })
             if len(fields) >= 12:
                 break
+        # Name-only shells become empty Mermaid boxes — drop them.
+        if not fields:
+            continue
         entities.append({"name": name, "fields": fields})
         if len(entities) >= 16:
             break
@@ -1326,19 +1329,38 @@ def _fill_flow_gaps(graph: dict) -> dict:
     return graph
 
 
+def _erd_attr_count(chart: str) -> int:
+    """How many field rows are in an erDiagram (0 ⇒ name-only boxes)."""
+    if not chart or "erDiagram" not in chart:
+        return 0
+    count = 0
+    for line in chart.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith(("erDiagram", "%%")):
+            continue
+        if stripped.endswith("{") or stripped == "}":
+            continue
+        if re.search(r"[|}o]--|:\s*", stripped):
+            continue
+        if re.match(r"^[A-Za-z_][\w]*\s+[A-Za-z_][\w]*", stripped):
+            count += 1
+    return count
+
+
 def _compile_erd(entities: list[dict]) -> str:
     """Build an erDiagram from the model list returned by the AI."""
-    if not entities:
+    filled = [e for e in entities if e.get("name") and (e.get("fields") or [])]
+    if not filled:
         return ""
     lines = ["erDiagram"]
-    model_names = {_mermaid_id(str(e["name"])) for e in entities if e.get("name")}
-    for entity in entities:
+    model_names = {_mermaid_id(str(e["name"])) for e in filled}
+    for entity in filled:
         name = _mermaid_id(str(entity.get("name") or "Unknown"))
         lines.append(f"  {name} {{")
         for f in entity.get("fields") or []:
             lines.append(_erd_attr_line(f.get("name"), f.get("type"), bool(f.get("ref"))))
         lines.append("  }")
-    for entity in entities:
+    for entity in filled:
         src = _mermaid_id(str(entity.get("name") or ""))
         for f in entity.get("fields") or []:
             ref = _mermaid_id(str(f.get("ref") or ""))
@@ -1476,8 +1498,21 @@ def apply_architecture(root: str, data: dict) -> None:
     diagrams["architecture"] = chart if not comments else chart + "\n" + "\n".join(comments)
     # Prefer Groq charts when present; keep static drawings when the model
     # left a view empty (after _fill_flow_gaps) so the page is never blank.
+    # Never replace a field-rich static ERD with name-only AI shells.
     if extra.get("erd"):
-        diagrams["erd"] = extra["erd"]
+        ai_erd = extra["erd"]
+        static_erd = diagrams.get("erd") or ""
+        ai_attrs = _erd_attr_count(ai_erd)
+        static_attrs = _erd_attr_count(static_erd)
+        if ai_attrs > 0 and ai_attrs >= static_attrs:
+            diagrams["erd"] = ai_erd
+        elif ai_attrs > 0 and not static_erd:
+            diagrams["erd"] = ai_erd
+        else:
+            log(
+                f"[repomap] keep static ERD ({static_attrs} attrs)"
+                f" over Groq ERD ({ai_attrs} attrs)"
+            )
     if extra.get("dataFlow"):
         diagrams["dataFlow"] = extra["dataFlow"]
     if extra.get("criticalPaths"):
